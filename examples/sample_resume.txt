@@ -1,0 +1,32 @@
+Amos Mwangi
+Software Engineer
+emosmwangi@gmail.com
+
+Summary:
+Backend engineer with experience in Python, data pipelines, and web applications.
+Strong focus on building reliable systems that handle complex real-world data.
+
+Technical Skills:
+- Languages: Python, JavaScript, TypeScript
+- Frameworks: FastAPI, Django, React, Next.js
+- Databases: PostgreSQL, Prisma, SQLite
+- Tools: Git, Docker, Linux, CI/CD
+- AI/ML: OpenAI API, prompt engineering, data extraction
+
+Experience:
+Software Engineer - LinkedTrust / What's Cookin'
+- Built data pipeline for AZSunshine campaign finance data processing
+- Developed web scraping system handling complex, inconsistent data sources
+- Worked with LinkedClaims specification for verifiable credentials
+- Built frontend components with React and TypeScript
+- Managed PostgreSQL databases with Prisma ORM
+
+Projects:
+- AZSunshine Data Pipeline: Python-based ETL system for campaign finance data
+  from multiple inconsistent government sources. Evaluated agentic AI approaches
+  but implemented deterministic closed-form code for reliability and cost efficiency.
+- LinkedTrust Platform: Full-stack development on a verifiable claims platform
+  using the LinkedClaims spec from DIF (Decentralized Identity Foundation).
+
+Education:
+Bachelor of Science in Computer Science
