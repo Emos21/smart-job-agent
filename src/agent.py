@@ -30,7 +30,19 @@ class Agent:
         self.registry = registry
         self.model = model
         self.memory = AgentMemory()
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self._client = None
+
+    @property
+    def client(self):
+        """Lazy-initialize the OpenAI client so it's only created when needed."""
+        if self._client is None:
+            self._client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        return self._client
+
+    @client.setter
+    def client(self, value):
+        """Allow injecting a mock client for testing."""
+        self._client = value
 
     def _build_system_prompt(self) -> str:
         """Construct the system prompt with available tool descriptions."""
