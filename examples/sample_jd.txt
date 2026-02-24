@@ -1,0 +1,41 @@
+AI Engineer - Voice Agents
+Rebld Technologies, Inc — San Francisco
+
+Backed by HF0 in San Francisco, Rebld is building the AI Assistant for the Home.
+This is not a chatbot. It's a true autonomous agent that executes multi-step
+workflows across voice, text, and connected systems.
+
+We're hiring a Senior Engineer to architect and build the core runtime powering
+voice-first, autonomous agents.
+
+The Role:
+You will design and ship the agent systems that turn intent into reliable
+execution. This is a hands-on, foundational engineering role.
+
+What You'll Build:
+- Multi-step task planning and execution (plan, act, verify, recover)
+- Tool routing and workflow state machines
+- Deterministic + LLM hybrid control loops
+- Context management and long-lived memory
+- Guardrails for safe, reliable autonomy
+
+Voice-First Agent Systems:
+- Streaming speech-to-agent pipelines
+- Interruptibility and conversational continuation
+- Sub-500ms agent response loops
+- LiveKit / WebRTC-based realtime infrastructure
+- Voice AI integrations (STT, TTS, turn detection, VAD)
+
+Requirements:
+- 5+ years backend engineering experience
+- Strong Python and/or Go
+- Experience building agentic AI workflows
+- Familiarity with LLM tool calling and structured outputs
+- Experience with real-time systems and WebRTC
+- Strong product judgment
+
+Preferred:
+- Experience with LiveKit or similar WebRTC platforms
+- Voice AI experience (STT, TTS, VAD)
+- Multi-agent system design
+- Early-stage startup experience
