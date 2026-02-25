@@ -10,6 +10,7 @@ from .tools.resume_analyzer import ResumeAnalyzerTool
 from .tools.skills_matcher import SkillsMatcherTool
 from .tools.company_researcher import CompanyResearcherTool
 from .tools.cover_letter import CoverLetterTool
+from .tools.job_search import JobSearchTool
 
 
 def build_agent(provider: str = "groq", model: str | None = None) -> Agent:
@@ -20,6 +21,7 @@ def build_agent(provider: str = "groq", model: str | None = None) -> Agent:
     registry.register(SkillsMatcherTool())
     registry.register(CompanyResearcherTool())
     registry.register(CoverLetterTool())
+    registry.register(JobSearchTool())
     return Agent(registry=registry, provider=provider, model=model)
 
 
@@ -92,6 +94,45 @@ def analyze(jd: str, resume: str, url: bool, provider: str, model: str):
 
 
 @cli.command()
+@click.option("--keywords", required=True, help="Comma-separated search keywords (e.g. 'python,backend,ai')")
+@click.option("--max-results", default=10, help="Max jobs to return (default: 10)")
+def search(keywords: str, max_results: int):
+    """Search for jobs matching your skills.
+
+    Searches across multiple free job boards (RemoteOK, Arbeitnow)
+    without requiring any API keys.
+    """
+    keyword_list = [k.strip() for k in keywords.split(",")]
+
+    click.echo("=" * 60)
+    click.echo("JOB SEARCH")
+    click.echo(f"Keywords: {', '.join(keyword_list)}")
+    click.echo("=" * 60)
+
+    tool = JobSearchTool()
+    result = tool.execute(keywords=keyword_list, max_results=max_results)
+
+    if not result["jobs"]:
+        click.echo("\nNo matching jobs found. Try broader keywords.")
+        return
+
+    click.echo(f"\nFound {result['total_found']} jobs, showing {result['returned']}:\n")
+
+    for i, job in enumerate(result["jobs"], 1):
+        click.echo(f"  {i}. {job['title']}")
+        click.echo(f"     Company:  {job['company']}")
+        click.echo(f"     Location: {job['location']}")
+        if job.get("tags"):
+            click.echo(f"     Tags:     {', '.join(job['tags'][:6])}")
+        if job.get("salary_min") and job.get("salary_max"):
+            click.echo(f"     Salary:   ${job['salary_min']:,} - ${job['salary_max']:,}")
+        click.echo(f"     Source:   {job['source']}")
+        if job.get("url"):
+            click.echo(f"     URL:      {job['url']}")
+        click.echo()
+
+
+@cli.command()
 def tools():
     """List all available agent tools."""
     registry = ToolRegistry()
@@ -100,6 +141,7 @@ def tools():
     registry.register(SkillsMatcherTool())
     registry.register(CompanyResearcherTool())
     registry.register(CoverLetterTool())
+    registry.register(JobSearchTool())
 
     click.echo("Available tools:\n")
     for tool in registry.list_tools():
