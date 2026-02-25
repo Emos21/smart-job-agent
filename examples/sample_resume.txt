@@ -18,7 +18,7 @@ Technical Skills:
 Experience:
 Senior Software Engineer - LinkedTrust.us (Remote, 2023 - Present)
 Making political money flows visible. Built azsunshine.cooperation.org - a campaign finance
-transparency platform processing 100k+ records, being looked at as a model for nationwide
+transparency platform processing 100M+ records, being looked at as a model for nationwide
 use across the United States. Created data pipelines to turn messy government data into
 something humans can actually understand. Exploring Agentic AI for automating document
 extraction from unstructured political finance documents.
