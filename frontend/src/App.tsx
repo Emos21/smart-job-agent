@@ -10,7 +10,9 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [chatKey, setChatKey] = useState(0);
 
-  function handleNewChat() {
+  async function handleNewChat() {
+    // Clear backend history first, then remount ChatPanel with fresh state
+    await fetch("/api/chat/history", { method: "DELETE" }).catch(() => {});
     setActiveTab("chat");
     setChatKey((k) => k + 1);
   }

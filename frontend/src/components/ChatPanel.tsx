@@ -44,11 +44,6 @@ export default function ChatPanel() {
     }
   }, [transcript, setTranscript]);
 
-  async function clearBackendHistory() {
-    // Clear backend history for a fresh start when using New Chat
-    await fetch("/api/chat/history", { method: "DELETE" }).catch(() => {});
-  }
-
   async function sendMessage(text?: string) {
     const userMsg = (text || input).trim();
     if (!userMsg || loading) return;
@@ -108,11 +103,7 @@ export default function ChatPanel() {
     }
   }
 
-  async function handleSuggestion(prompt: string) {
-    // If this is a fresh mount (New Chat), clear backend history first
-    if (messages.length === 0) {
-      await clearBackendHistory();
-    }
+  function handleSuggestion(prompt: string) {
     sendMessage(prompt);
   }
 
