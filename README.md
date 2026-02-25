@@ -78,6 +78,19 @@ python3 -m src.cli analyze --jd "https://example.com/job-posting" --resume my_re
 python3 -m src.cli analyze --jd job.txt --resume resume.txt --model gpt-4o
 ```
 
+### Search for jobs
+
+```bash
+python3 -m src.cli search --keywords "python,backend,ai" --max-results 10
+```
+
+### Use a different LLM provider
+
+```bash
+python3 -m src.cli analyze --jd job.txt --resume resume.txt --provider openai
+python3 -m src.cli analyze --jd job.txt --resume resume.txt --provider deepseek
+```
+
 ### List available tools
 
 ```bash
@@ -93,6 +106,7 @@ python3 -m src.cli tools
 | `match_skills` | Compare required/preferred skills with gap analysis and match score |
 | `research_company` | Fetch company website for interview context |
 | `generate_cover_letter` | Produce a tailored cover letter from analysis results |
+| `search_jobs` | Search RemoteOK and Arbeitnow for matching jobs (no API key needed) |
 
 ## How the ReAct Loop Works
 
@@ -110,7 +124,7 @@ The agent typically runs 4-7 steps: parse JD → analyze resume → match skills
 python3 -m pytest tests/ -v
 ```
 
-All 32 tests run without an API key — agent tests use mocked OpenAI responses.
+All 40 tests run without an API key — agent tests use mocked LLM responses.
 
 ## Project Structure
 
@@ -127,11 +141,13 @@ smart-job-agent/
 │       ├── resume_analyzer.py # Resume section extractor
 │       ├── skills_matcher.py # Skills gap analysis with aliases
 │       ├── company_researcher.py # Company website fetcher
-│       └── cover_letter.py   # Cover letter generator
+│       ├── cover_letter.py   # Cover letter generator
+│       └── job_search.py     # Multi-source job search
 ├── tests/
 │   ├── test_agent.py         # Agent loop tests (mocked LLM)
 │   ├── test_memory.py        # Memory system tests
-│   └── test_tools.py         # Individual tool tests
+│   ├── test_tools.py         # Individual tool tests
+│   └── test_job_search.py   # Job search tool tests
 ├── examples/
 │   ├── sample_jd.txt         # Example job description
 │   └── sample_resume.txt     # Example resume
@@ -142,7 +158,7 @@ smart-job-agent/
 ## Tech Stack
 
 - **Python 3.12** — core runtime
-- **OpenAI API** — LLM reasoning at runtime (gpt-4o-mini default)
+- **Multi-provider LLM** — Groq (free, default), OpenAI, DeepSeek via OpenAI-compatible API
 - **Click** — CLI framework
 - **BeautifulSoup4** — HTML parsing for URL fetching
 - **Requests** — HTTP client
