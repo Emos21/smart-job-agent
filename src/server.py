@@ -84,6 +84,11 @@ class UpdateApplicationRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    conversation_id: int | None = None
+
+
+class RenameConversationRequest(BaseModel):
+    title: str
 
 
 # --- API Routes ---
@@ -197,6 +202,53 @@ def update_application(app_id: int, req: UpdateApplicationRequest):
     return {"message": "Updated"}
 
 
+# --- Conversation endpoints ---
+
+@app.get("/api/conversations")
+def list_conversations():
+    """Get all conversations, most recent first."""
+    return db.get_conversations()
+
+
+@app.post("/api/conversations")
+def create_conversation_endpoint():
+    """Create a new empty conversation."""
+    conv_id = db.create_conversation("New Chat")
+    conv = db.get_conversation(conv_id)
+    return conv
+
+
+@app.delete("/api/conversations/{conv_id}")
+def delete_conversation(conv_id: int):
+    """Delete a conversation and all its messages."""
+    conv = db.get_conversation(conv_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    db.delete_conversation(conv_id)
+    return {"message": "Conversation deleted"}
+
+
+@app.patch("/api/conversations/{conv_id}")
+def rename_conversation(conv_id: int, req: RenameConversationRequest):
+    """Rename a conversation."""
+    conv = db.get_conversation(conv_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    db.update_conversation_title(conv_id, req.title)
+    return {"message": "Conversation renamed"}
+
+
+@app.get("/api/conversations/{conv_id}/messages")
+def get_conversation_messages(conv_id: int):
+    """Get messages for a specific conversation."""
+    conv = db.get_conversation(conv_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return db.get_chat_history(conv_id)
+
+
+# --- Chat (conversation-scoped) ---
+
 SYSTEM_PROMPT = """You are KaziAI, an intelligent AI career assistant. You help job seekers with:
 - Searching and finding relevant jobs
 - Analyzing job descriptions against resumes
@@ -216,6 +268,18 @@ def _get_llm_client():
     if not api_key:
         return None
     return OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
+
+
+def _truncate_title(text: str, max_len: int = 40) -> str:
+    """Truncate text to max_len at a word boundary."""
+    text = text.strip().replace("\n", " ")
+    if len(text) <= max_len:
+        return text
+    truncated = text[:max_len]
+    last_space = truncated.rfind(" ")
+    if last_space > 10:
+        truncated = truncated[:last_space]
+    return truncated + "..."
 
 
 def _run_tool_action(msg: str) -> str | None:
@@ -251,10 +315,17 @@ def _run_tool_action(msg: str) -> str | None:
 @app.post("/api/chat")
 def chat(req: ChatRequest):
     """Handle a chat message using LLM with tool augmentation."""
-    db.save_chat_message("user", req.message)
+    conversation_id = req.conversation_id
+
+    # Auto-create conversation if none provided
+    if conversation_id is None:
+        title = _truncate_title(req.message)
+        conversation_id = db.create_conversation(title)
+
+    db.save_chat_message("user", req.message, conversation_id)
 
     # Get recent chat history for context
-    history = db.get_chat_history(limit=20)
+    history = db.get_chat_history(conversation_id, limit=20)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     for msg in history[:-1]:  # exclude current message (already in history)
         messages.append({"role": msg["role"], "content": msg["content"]})
@@ -285,21 +356,8 @@ def chat(req: ChatRequest):
     else:
         response = "AI backend not configured. Please set GROQ_API_KEY in your .env file."
 
-    db.save_chat_message("assistant", response)
-    return {"response": response}
-
-
-@app.get("/api/chat/history")
-def chat_history():
-    """Get chat history."""
-    return db.get_chat_history()
-
-
-@app.delete("/api/chat/history")
-def clear_chat_history():
-    """Clear all chat history for a fresh conversation."""
-    db.clear_chat_history()
-    return {"message": "Chat history cleared"}
+    db.save_chat_message("assistant", response, conversation_id)
+    return {"response": response, "conversation_id": conversation_id}
 
 
 # Serve React frontend for all non-API routes

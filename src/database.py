@@ -13,11 +13,12 @@ def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
 def init_db() -> None:
-    """Create database tables if they don't exist."""
+    """Create database tables if they don't exist, and run migrations."""
     conn = get_db()
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS jobs (
@@ -56,16 +57,135 @@ def init_db() -> None:
             created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS chat_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id INTEGER REFERENCES conversations(id) ON DELETE CASCADE,
             role TEXT NOT NULL,
             content TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
     """)
     conn.commit()
+
+    # Migration: add conversation_id column if it doesn't exist (upgrading from old schema)
+    cols = [row["name"] for row in conn.execute("PRAGMA table_info(chat_history)").fetchall()]
+    if "conversation_id" not in cols:
+        conn.execute("ALTER TABLE chat_history ADD COLUMN conversation_id INTEGER REFERENCES conversations(id) ON DELETE CASCADE")
+        conn.commit()
+
+    # Migrate orphaned messages (those without a conversation_id) into a "Previous Chat" conversation
+    orphan = conn.execute("SELECT COUNT(*) as cnt FROM chat_history WHERE conversation_id IS NULL").fetchone()
+    if orphan["cnt"] > 0:
+        now = datetime.now().isoformat()
+        cursor = conn.execute(
+            "INSERT INTO conversations (title, created_at, updated_at) VALUES (?, ?, ?)",
+            ("Previous Chat", now, now),
+        )
+        conv_id = cursor.lastrowid
+        conn.execute("UPDATE chat_history SET conversation_id = ? WHERE conversation_id IS NULL", (conv_id,))
+        conn.commit()
+
     conn.close()
 
+
+# --- Conversation CRUD ---
+
+def create_conversation(title: str) -> int:
+    """Create a new conversation and return its ID."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    cursor = conn.execute(
+        "INSERT INTO conversations (title, created_at, updated_at) VALUES (?, ?, ?)",
+        (title, now, now),
+    )
+    conn.commit()
+    conv_id = cursor.lastrowid
+    conn.close()
+    return conv_id
+
+
+def get_conversations() -> list[dict]:
+    """Get all conversations, most recent first."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM conversations ORDER BY updated_at DESC"
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_conversation(conv_id: int) -> dict | None:
+    """Get a single conversation by ID."""
+    conn = get_db()
+    row = conn.execute("SELECT * FROM conversations WHERE id = ?", (conv_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_conversation_title(conv_id: int, title: str) -> None:
+    """Rename a conversation."""
+    conn = get_db()
+    conn.execute(
+        "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
+        (title, datetime.now().isoformat(), conv_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_conversation(conv_id: int) -> None:
+    """Delete a conversation and all its messages."""
+    conn = get_db()
+    conn.execute("DELETE FROM chat_history WHERE conversation_id = ?", (conv_id,))
+    conn.execute("DELETE FROM conversations WHERE id = ?", (conv_id,))
+    conn.commit()
+    conn.close()
+
+
+def touch_conversation(conv_id: int) -> None:
+    """Update the updated_at timestamp for a conversation."""
+    conn = get_db()
+    conn.execute(
+        "UPDATE conversations SET updated_at = ? WHERE id = ?",
+        (datetime.now().isoformat(), conv_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+# --- Chat messages (conversation-scoped) ---
+
+def save_chat_message(role: str, content: str, conversation_id: int) -> None:
+    """Save a chat message to a specific conversation."""
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO chat_history (conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+        (conversation_id, role, content, datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    touch_conversation(conversation_id)
+
+
+def get_chat_history(conversation_id: int, limit: int = 50) -> list[dict]:
+    """Get recent chat messages for a specific conversation."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM chat_history WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?",
+        (conversation_id, limit),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in reversed(rows)]
+
+
+# --- Jobs & Applications (unchanged) ---
 
 def save_job(job: dict) -> int:
     """Save a job to the database and return its ID."""
@@ -159,35 +279,6 @@ def save_analysis(application_id: int, agent_name: str, output: str) -> int:
     analysis_id = cursor.lastrowid
     conn.close()
     return analysis_id
-
-
-def save_chat_message(role: str, content: str) -> None:
-    """Save a chat message to history."""
-    conn = get_db()
-    conn.execute(
-        "INSERT INTO chat_history (role, content, created_at) VALUES (?, ?, ?)",
-        (role, content, datetime.now().isoformat()),
-    )
-    conn.commit()
-    conn.close()
-
-
-def get_chat_history(limit: int = 50) -> list[dict]:
-    """Get recent chat messages."""
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT * FROM chat_history ORDER BY created_at DESC LIMIT ?", (limit,)
-    ).fetchall()
-    conn.close()
-    return [dict(row) for row in reversed(rows)]
-
-
-def clear_chat_history() -> None:
-    """Delete all chat history."""
-    conn = get_db()
-    conn.execute("DELETE FROM chat_history")
-    conn.commit()
-    conn.close()
 
 
 # Initialize DB on import

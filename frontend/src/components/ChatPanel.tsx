@@ -11,12 +11,18 @@ const suggestions = [
   { icon: MessageSquare, label: "Career advice", prompt: "What skills should I learn for 2026?" },
 ];
 
-export default function ChatPanel({ fresh = false }: { fresh?: boolean }) {
+interface ChatPanelProps {
+  conversationId: number | null;
+  onConversationCreated: (id: number) => void;
+}
+
+export default function ChatPanel({ conversationId, onConversationCreated }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const convIdRef = useRef<number | null>(conversationId);
   const {
     isListening,
     transcript,
@@ -26,14 +32,22 @@ export default function ChatPanel({ fresh = false }: { fresh?: boolean }) {
     setTranscript,
   } = useSpeechRecognition();
 
+  // Keep ref in sync with prop
   useEffect(() => {
-    if (!fresh) {
-      fetch("/api/chat/history")
+    convIdRef.current = conversationId;
+  }, [conversationId]);
+
+  // Load messages for existing conversation, or start empty
+  useEffect(() => {
+    if (conversationId) {
+      fetch(`/api/conversations/${conversationId}/messages`)
         .then((r) => r.json())
         .then(setMessages)
         .catch(() => {});
+    } else {
+      setMessages([]);
     }
-  }, [fresh]);
+  }, [conversationId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -66,9 +80,19 @@ export default function ChatPanel({ fresh = false }: { fresh?: boolean }) {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: userMsg }),
+        body: JSON.stringify({
+          message: userMsg,
+          conversation_id: convIdRef.current,
+        }),
       });
       const data = await res.json();
+
+      // If backend created a new conversation, update our ref and notify parent
+      if (data.conversation_id && data.conversation_id !== convIdRef.current) {
+        convIdRef.current = data.conversation_id;
+        onConversationCreated(data.conversation_id);
+      }
+
       setMessages((prev) => [
         ...prev,
         {
