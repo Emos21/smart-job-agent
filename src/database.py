@@ -182,5 +182,13 @@ def get_chat_history(limit: int = 50) -> list[dict]:
     return [dict(row) for row in reversed(rows)]
 
 
+def clear_chat_history() -> None:
+    """Delete all chat history."""
+    conn = get_db()
+    conn.execute("DELETE FROM chat_history")
+    conn.commit()
+    conn.close()
+
+
 # Initialize DB on import
 init_db()

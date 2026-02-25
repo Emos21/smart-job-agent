@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from openai import OpenAI
 
 from . import database as db
 from .tools.job_search import JobSearchTool
@@ -196,66 +197,93 @@ def update_application(app_id: int, req: UpdateApplicationRequest):
     return {"message": "Updated"}
 
 
-@app.post("/api/chat")
-def chat(req: ChatRequest):
-    """Handle a chat message from the dashboard."""
-    db.save_chat_message("user", req.message)
+SYSTEM_PROMPT = """You are KaziAI, an intelligent AI career assistant. You help job seekers with:
+- Searching and finding relevant jobs
+- Analyzing job descriptions against resumes
+- ATS (Applicant Tracking System) resume optimization
+- Writing tailored cover letters
+- Interview preparation and coaching
+- Career advice and strategy
 
-    # Simple intent detection — route to the right action
-    msg = req.message.lower()
+You have access to tools that can search real job boards, score resumes, and generate materials.
+Be conversational, helpful, and proactive. Give specific, actionable advice.
+When a user asks to search for jobs, extract the key skills/role from their message.
+Keep responses concise but insightful. Use markdown formatting for readability."""
 
-    if any(w in msg for w in ["search", "find", "look for", "jobs"]):
-        # Extract keywords from the message
-        words = req.message.split()
-        keywords = [w for w in words if len(w) > 3 and w.lower() not in
-                    ["search", "find", "look", "jobs", "for", "with", "that", "have"]]
+
+def _get_llm_client():
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        return None
+    return OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
+
+
+def _run_tool_action(msg: str) -> str | None:
+    """Check if the message needs a tool action and return tool results."""
+    lower = msg.lower()
+
+    if any(w in lower for w in ["search", "find", "look for", "jobs", "hiring", "openings", "vacancies"]):
+        words = msg.split()
+        stop_words = {"search", "find", "look", "jobs", "for", "with", "that", "have",
+                      "me", "some", "the", "and", "need", "want", "please", "can", "you",
+                      "asap", "now", "urgently", "remote", "job", "a", "i", "any"}
+        keywords = [w for w in words if len(w) > 2 and w.lower() not in stop_words]
         if not keywords:
-            keywords = ["python", "backend"]
+            keywords = ["software", "engineer"]
 
         tool = JobSearchTool()
         result = tool.execute(keywords=keywords, max_results=5)
         jobs = result.get("jobs", [])
 
         if jobs:
-            response = f"Found {result['total_found']} jobs. Here are the top {len(jobs)}:\n\n"
+            tool_data = f"[SEARCH RESULTS: Found {result['total_found']} jobs]\n"
             for i, job in enumerate(jobs, 1):
-                response += f"{i}. **{job['title']}** at {job['company']} ({job['location']})\n"
-            response += "\nWant me to analyze any of these against your resume?"
-        else:
-            response = "No jobs found matching those keywords. Try different terms."
+                tool_data += (
+                    f"{i}. {job['title']} at {job['company']} "
+                    f"({job['location']}) - {job.get('url', 'No URL')}\n"
+                )
+            return tool_data
+        return "[SEARCH RESULTS: No jobs found for those keywords]"
 
-    elif any(w in msg for w in ["analyze", "match", "score", "ats"]):
-        response = (
-            "To analyze a job, paste the job description text and I'll run "
-            "the full analysis pipeline — ATS scoring, skills matching, "
-            "and interview prep."
-        )
+    return None
 
-    elif any(w in msg for w in ["interview", "prep", "questions"]):
-        response = (
-            "I can generate interview questions for any role. "
-            "Tell me the role title and company, and I'll prep you."
-        )
 
-    elif any(w in msg for w in ["hello", "hi", "hey"]):
-        response = (
-            "Hey! I'm KaziAI, your career assistant. I can:\n\n"
-            "- **Search** for jobs matching your skills\n"
-            "- **Analyze** job descriptions against your resume\n"
-            "- **Score** your resume for ATS compatibility\n"
-            "- **Write** tailored cover letters\n"
-            "- **Prep** you for interviews\n\n"
-            "What would you like to do?"
-        )
+@app.post("/api/chat")
+def chat(req: ChatRequest):
+    """Handle a chat message using LLM with tool augmentation."""
+    db.save_chat_message("user", req.message)
 
+    # Get recent chat history for context
+    history = db.get_chat_history(limit=20)
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    for msg in history[:-1]:  # exclude current message (already in history)
+        messages.append({"role": msg["role"], "content": msg["content"]})
+
+    # Check if we need to run a tool and inject results
+    tool_result = _run_tool_action(req.message)
+    if tool_result:
+        messages.append({
+            "role": "user",
+            "content": f"{req.message}\n\n{tool_result}\n\nUse these results to give a helpful response.",
+        })
     else:
-        response = (
-            "I can help you with:\n"
-            "- **Search jobs** — 'find python backend jobs'\n"
-            "- **Analyze a role** — paste a job description\n"
-            "- **Interview prep** — 'prep me for [role] at [company]'\n\n"
-            "What would you like to do?"
-        )
+        messages.append({"role": "user", "content": req.message})
+
+    # Try LLM response
+    client = _get_llm_client()
+    if client:
+        try:
+            completion = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=messages,
+                max_tokens=1024,
+                temperature=0.7,
+            )
+            response = completion.choices[0].message.content
+        except Exception as e:
+            response = f"I'm having trouble connecting to my AI backend: {str(e)[:100]}. Try again in a moment."
+    else:
+        response = "AI backend not configured. Please set GROQ_API_KEY in your .env file."
 
     db.save_chat_message("assistant", response)
     return {"response": response}
@@ -265,6 +293,13 @@ def chat(req: ChatRequest):
 def chat_history():
     """Get chat history."""
     return db.get_chat_history()
+
+
+@app.delete("/api/chat/history")
+def clear_chat_history():
+    """Clear all chat history for a fresh conversation."""
+    db.clear_chat_history()
+    return {"message": "Chat history cleared"}
 
 
 # Serve React frontend for all non-API routes

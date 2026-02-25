@@ -1,14 +1,30 @@
 import { useState, useEffect, useRef } from "react";
+import ReactMarkdown from "react-markdown";
+import { Bot, ArrowUp, Mic, MicOff, Briefcase, FileText, Target, MessageSquare } from "lucide-react";
 import { useSpeechRecognition } from "../hooks/useSpeechRecognition";
 import type { ChatMessage } from "../types";
+
+const suggestions = [
+  { icon: Briefcase, label: "Search for jobs", prompt: "Search for senior React developer jobs" },
+  { icon: FileText, label: "Analyze my resume", prompt: "How can I improve my resume for tech roles?" },
+  { icon: Target, label: "Interview prep", prompt: "Help me prepare for a frontend engineer interview" },
+  { icon: MessageSquare, label: "Career advice", prompt: "What skills should I learn for 2026?" },
+];
 
 export default function ChatPanel() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { isListening, transcript, startListening, stopListening, isSupported, setTranscript } =
-    useSpeechRecognition();
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const {
+    isListening,
+    transcript,
+    startListening,
+    stopListening,
+    isSupported,
+    setTranscript,
+  } = useSpeechRecognition();
 
   useEffect(() => {
     fetch("/api/chat/history")
@@ -28,15 +44,24 @@ export default function ChatPanel() {
     }
   }, [transcript, setTranscript]);
 
-  async function sendMessage(e: React.FormEvent) {
-    e.preventDefault();
-    if (!input.trim() || loading) return;
+  async function clearBackendHistory() {
+    // Clear backend history for a fresh start when using New Chat
+    await fetch("/api/chat/history", { method: "DELETE" }).catch(() => {});
+  }
 
-    const userMsg = input.trim();
+  async function sendMessage(text?: string) {
+    const userMsg = (text || input).trim();
+    if (!userMsg || loading) return;
+
     setInput("");
     setMessages((prev) => [
       ...prev,
-      { id: Date.now(), role: "user", content: userMsg, created_at: new Date().toISOString() },
+      {
+        id: Date.now(),
+        role: "user",
+        content: userMsg,
+        created_at: new Date().toISOString(),
+      },
     ]);
     setLoading(true);
 
@@ -71,93 +96,148 @@ export default function ChatPanel() {
     }
   }
 
-  function renderMarkdown(text: string) {
-    return text.split("\n").map((line, i) => {
-      const boldReplaced = line.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-      if (line.startsWith("- ")) {
-        return (
-          <li key={i} className="ml-4 list-disc" dangerouslySetInnerHTML={{ __html: boldReplaced.slice(2) }} />
-        );
-      }
-      return <p key={i} className={line === "" ? "h-2" : ""} dangerouslySetInnerHTML={{ __html: boldReplaced }} />;
-    });
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    sendMessage();
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  }
+
+  async function handleSuggestion(prompt: string) {
+    // If this is a fresh mount (New Chat), clear backend history first
+    if (messages.length === 0) {
+      await clearBackendHistory();
+    }
+    sendMessage(prompt);
+  }
+
+  // Auto-resize textarea
+  function handleInputChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    setInput(e.target.value);
+    const el = e.target;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 160) + "px";
   }
 
   return (
     <div className="flex flex-col h-full">
-      <div className="p-4 border-b border-slate-700">
-        <h2 className="text-lg font-semibold text-slate-100">KaziAI Assistant</h2>
-        <p className="text-xs text-slate-400">Search jobs, analyze roles, prep for interviews</p>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.length === 0 && (
-          <div className="text-center text-slate-500 mt-20">
-            <p className="text-4xl mb-4">🤖</p>
-            <p className="text-lg font-medium text-slate-300">Welcome to KaziAI</p>
-            <p className="text-sm mt-2">
-              Try: "search python backend jobs" or "hello"
+      {/* Messages area */}
+      <div className="flex-1 overflow-y-auto">
+        {messages.length === 0 ? (
+          /* Empty state — centered welcome */
+          <div className="flex flex-col items-center justify-center h-full px-6">
+            <div className="w-12 h-12 rounded-full bg-teal-500/10 flex items-center justify-center mb-6">
+              <Bot size={24} className="text-teal-400" />
+            </div>
+            <h2 className="text-xl font-semibold text-zinc-100 mb-1">
+              How can I help you today?
+            </h2>
+            <p className="text-sm text-zinc-500 mb-8">
+              Search jobs, analyze roles, prep for interviews
             </p>
-          </div>
-        )}
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-          >
-            <div
-              className={`max-w-[75%] rounded-lg px-4 py-3 text-sm ${
-                msg.role === "user"
-                  ? "bg-emerald-600 text-white"
-                  : "bg-slate-800 text-slate-200 border border-slate-700"
-              }`}
-            >
-              {renderMarkdown(msg.content)}
+            <div className="grid grid-cols-2 gap-3 max-w-lg w-full">
+              {suggestions.map((s) => {
+                const Icon = s.icon;
+                return (
+                  <button
+                    key={s.label}
+                    onClick={() => handleSuggestion(s.prompt)}
+                    className="flex items-center gap-3 p-4 rounded-xl border border-zinc-800 bg-zinc-900/50 text-sm text-zinc-300 text-left hover:border-zinc-700 hover:bg-zinc-800/50"
+                  >
+                    <Icon size={16} className="text-zinc-500 shrink-0" />
+                    <span>{s.label}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
-        ))}
-        {loading && (
-          <div className="flex justify-start">
-            <div className="bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-sm text-slate-400">
-              Thinking...
-            </div>
+        ) : (
+          /* Message list */
+          <div className="max-w-3xl mx-auto px-6 py-6 space-y-6">
+            {messages.map((msg) => (
+              <div key={msg.id} className="flex gap-3">
+                {msg.role === "assistant" ? (
+                  <>
+                    <div className="w-7 h-7 rounded-full bg-teal-500/10 flex items-center justify-center shrink-0 mt-0.5">
+                      <Bot size={14} className="text-teal-400" />
+                    </div>
+                    <div className="flex-1 text-sm text-zinc-200 leading-relaxed prose prose-invert prose-sm max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0 prose-headings:text-zinc-100 prose-strong:text-zinc-100 prose-code:text-teal-300 prose-code:bg-zinc-800 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-800">
+                      <ReactMarkdown>{msg.content}</ReactMarkdown>
+                    </div>
+                  </>
+                ) : (
+                  <div className="ml-auto max-w-[80%]">
+                    <div className="bg-teal-600 text-white rounded-2xl rounded-br-sm px-4 py-2.5 text-sm">
+                      {msg.content}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+            {loading && (
+              <div className="flex gap-3">
+                <div className="w-7 h-7 rounded-full bg-teal-500/10 flex items-center justify-center shrink-0">
+                  <Bot size={14} className="text-teal-400" />
+                </div>
+                <div className="text-sm text-zinc-500 py-2">
+                  <span className="inline-flex gap-1">
+                    <span className="w-1.5 h-1.5 bg-zinc-500 rounded-full" />
+                    <span className="w-1.5 h-1.5 bg-zinc-600 rounded-full" />
+                    <span className="w-1.5 h-1.5 bg-zinc-700 rounded-full" />
+                  </span>
+                </div>
+              </div>
+            )}
+            <div ref={messagesEndRef} />
           </div>
         )}
-        <div ref={messagesEndRef} />
       </div>
 
-      <form onSubmit={sendMessage} className="p-4 border-t border-slate-700">
-        <div className="flex gap-2">
-          <input
-            type="text"
+      {/* Input bar */}
+      <div className="px-6 pb-5 pt-2">
+        <form
+          onSubmit={handleSubmit}
+          className="max-w-3xl mx-auto relative flex items-end gap-2 bg-zinc-900 border border-zinc-800 rounded-2xl px-4 py-2 focus-within:border-zinc-700"
+        >
+          <textarea
+            ref={inputRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask KaziAI anything about your job search..."
-            className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-4 py-3 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+            onChange={handleInputChange}
+            onKeyDown={handleKeyDown}
+            placeholder="Message KaziAI..."
+            rows={1}
+            className="flex-1 bg-transparent text-sm text-zinc-100 placeholder-zinc-600 resize-none outline-none py-1.5 max-h-40"
           />
-          {isSupported && (
+          <div className="flex items-center gap-1 shrink-0">
+            {isSupported && (
+              <button
+                type="button"
+                onClick={isListening ? stopListening : startListening}
+                className={`p-2 rounded-lg ${
+                  isListening
+                    ? "text-red-400 bg-red-500/10"
+                    : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800"
+                }`}
+                title={isListening ? "Stop listening" : "Voice input"}
+              >
+                {isListening ? <MicOff size={16} /> : <Mic size={16} />}
+              </button>
+            )}
             <button
-              type="button"
-              onClick={isListening ? stopListening : startListening}
-              className={`px-4 rounded-lg border text-lg ${
-                isListening
-                  ? "bg-red-600 border-red-500 text-white"
-                  : "bg-slate-800 border-slate-600 text-slate-300 hover:border-emerald-500 hover:text-emerald-400"
-              }`}
-              title={isListening ? "Stop listening" : "Voice input"}
+              type="submit"
+              disabled={loading || !input.trim()}
+              className="p-2 rounded-lg bg-teal-600 text-white disabled:opacity-30 disabled:cursor-not-allowed hover:bg-teal-500"
             >
-              🎙️
+              <ArrowUp size={16} />
             </button>
-          )}
-          <button
-            type="submit"
-            disabled={loading || !input.trim()}
-            className="px-6 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Send
-          </button>
-        </div>
-      </form>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
