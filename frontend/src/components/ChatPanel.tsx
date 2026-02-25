@@ -11,7 +11,7 @@ const suggestions = [
   { icon: MessageSquare, label: "Career advice", prompt: "What skills should I learn for 2026?" },
 ];
 
-export default function ChatPanel() {
+export default function ChatPanel({ fresh = false }: { fresh?: boolean }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -27,11 +27,13 @@ export default function ChatPanel() {
   } = useSpeechRecognition();
 
   useEffect(() => {
-    fetch("/api/chat/history")
-      .then((r) => r.json())
-      .then(setMessages)
-      .catch(() => {});
-  }, []);
+    if (!fresh) {
+      fetch("/api/chat/history")
+        .then((r) => r.json())
+        .then(setMessages)
+        .catch(() => {});
+    }
+  }, [fresh]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });

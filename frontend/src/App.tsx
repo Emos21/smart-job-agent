@@ -27,7 +27,7 @@ export default function App() {
         onNewChat={handleNewChat}
       />
       <main className="flex-1 overflow-hidden">
-        {activeTab === "chat" && <ChatPanel key={chatKey} />}
+        {activeTab === "chat" && <ChatPanel key={chatKey} fresh={chatKey > 0} />}
         {activeTab === "search" && <SearchPanel />}
         {activeTab === "analyze" && <AnalyzePanel />}
         {activeTab === "tracker" && <TrackerPanel />}
