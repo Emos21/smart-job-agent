@@ -28,3 +28,8 @@ Thumbs.db
 # Project
 output/
 *.log
+kaziai.db
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
