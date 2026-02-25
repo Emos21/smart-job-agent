@@ -26,17 +26,47 @@ class Agent:
     agentic AI, not just AI-assisted code generation.
     """
 
-    def __init__(self, registry: ToolRegistry, model: str = "gpt-4o-mini"):
+    # Supported providers and their base URLs
+    PROVIDERS = {
+        "groq": {
+            "base_url": "https://api.groq.com/openai/v1",
+            "env_key": "GROQ_API_KEY",
+            "default_model": "llama-3.3-70b-versatile",
+        },
+        "openai": {
+            "base_url": None,  # Uses default OpenAI URL
+            "env_key": "OPENAI_API_KEY",
+            "default_model": "gpt-4o-mini",
+        },
+        "deepseek": {
+            "base_url": "https://api.deepseek.com",
+            "env_key": "DEEPSEEK_API_KEY",
+            "default_model": "deepseek-chat",
+        },
+    }
+
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        provider: str = "groq",
+        model: str | None = None,
+    ):
         self.registry = registry
-        self.model = model
+        self.provider = provider
         self.memory = AgentMemory()
+
+        provider_config = self.PROVIDERS.get(provider, self.PROVIDERS["groq"])
+        self.model = model or provider_config["default_model"]
         self._client = None
+        self._provider_config = provider_config
 
     @property
     def client(self):
-        """Lazy-initialize the OpenAI client so it's only created when needed."""
+        """Lazy-initialize the OpenAI-compatible client."""
         if self._client is None:
-            self._client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            api_key = os.getenv(self._provider_config["env_key"])
+            base_url = self._provider_config["base_url"]
+            self._client = OpenAI(api_key=api_key, base_url=base_url)
         return self._client
 
     @client.setter
