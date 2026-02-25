@@ -27,7 +27,7 @@ def build_agent(provider: str = "groq", model: str | None = None) -> Agent:
 
 @click.group()
 def cli():
-    """Smart Job Agent — AI-powered job application analyzer."""
+    """KaziAI — AI-powered career platform."""
     pass
 
 
@@ -77,7 +77,7 @@ def analyze(jd: str, resume: str, url: bool, provider: str, model: str):
     agent = build_agent(provider=provider, model=model)
 
     click.echo("=" * 60)
-    click.echo("SMART JOB AGENT")
+    click.echo("KAZI AI")
     click.echo(f"Provider: {provider} | Model: {agent.model}")
     click.echo("=" * 60)
 

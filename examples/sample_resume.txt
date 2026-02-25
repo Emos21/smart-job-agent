@@ -1,32 +1,52 @@
 Amos Mwangi
-Software Engineer
-emosmwangi@gmail.com
+emosmwangi@gmail.com | +254-768-349-005 | github.com/Emos21
 
 Summary:
-Backend engineer with experience in Python, data pipelines, and web applications.
-Strong focus on building reliable systems that handle complex real-world data.
+Senior Software Engineer specializing in backend systems, civic technology, and data pipelines.
+Experienced in building production Django applications, campaign finance transparency tools,
+and business automation platforms. Currently exploring Agentic AI for document extraction
+and data-driven decision making. Track record of delivering impactful solutions from Qatar
+to Arizona.
 
 Technical Skills:
-- Languages: Python, JavaScript, TypeScript
-- Frameworks: FastAPI, Django, React, Next.js
-- Databases: PostgreSQL, Prisma, SQLite
-- Tools: Git, Docker, Linux, CI/CD
-- AI/ML: OpenAI API, prompt engineering, data extraction
+- Languages: Python, TypeScript, JavaScript
+- Backend: Django, FastAPI, PostgreSQL, REST APIs, Data Pipelines
+- Frontend: React, Vite, HTML/CSS, Responsive Design
+- Infrastructure: AWS, Docker, CI/CD, Git, Linux
+- Emerging: Agentic AI, LLM Integration, Document Extraction
 
 Experience:
-Software Engineer - LinkedTrust / What's Cookin'
-- Built data pipeline for AZSunshine campaign finance data processing
-- Developed web scraping system handling complex, inconsistent data sources
-- Worked with LinkedClaims specification for verifiable credentials
-- Built frontend components with React and TypeScript
-- Managed PostgreSQL databases with Prisma ORM
+Senior Software Engineer - LinkedTrust.us (Remote, 2023 - Present)
+Making political money flows visible. Built azsunshine.cooperation.org - a campaign finance
+transparency platform processing 100k+ records, being looked at as a model for nationwide
+use across the United States. Created data pipelines to turn messy government data into
+something humans can actually understand. Exploring Agentic AI for automating document
+extraction from unstructured political finance documents.
+Stack: Python, Django, React, TypeScript, PostgreSQL, AWS, Data Visualization
+
+Software Engineer (Contract) - Azentrix (Tucson, AZ Remote, 2025)
+Built azentrix.us - a business automation platform helping companies streamline operations.
+The platform handles client onboarding, billing, invoicing, and workflow management. 250+
+business implementations, saving 4,000+ operational hours. Clean UI with responsive design
+and performance-focused architecture.
+Stack: JavaScript, HTML/CSS, Responsive Design, Vanilla JS
+
+Software Engineer - Aamal Services (Doha, Qatar, 2021 - 2022)
+Built a bus wash management and invoicing system for Aamal Services, handling fleet washing
+operations for Mowasalat (Qatar's national transport company). The system tracks washing
+tasks across multiple depot sites, merges operations with invoicing, and handles before/after
+photo documentation. Added damage reporting, QR code scanning for site verification, timer
+tracking for task duration, and PDF report generation.
+Stack: Django, PostgreSQL, Pillow, xhtml2pdf, QR Code Integration
 
 Projects:
-- AZSunshine Data Pipeline: Python-based ETL system for campaign finance data
-  from multiple inconsistent government sources. Evaluated agentic AI approaches
-  but implemented deterministic closed-form code for reliability and cost efficiency.
-- LinkedTrust Platform: Full-stack development on a verifiable claims platform
-  using the LinkedClaims spec from DIF (Decentralized Identity Foundation).
+- AZ Sunshine (azsunshine.cooperation.org): Campaign finance transparency platform for
+  Arizona elections, processing 100k+ political expenditure records. Designed as a model
+  for nationwide adoption. Features interactive money flow visualizations and race analysis.
+- Azentrix (azentrix.us): Business automation platform with 250+ implementations across
+  client management, billing, and workflow operations.
+- Mowasalat Bus Wash System: Fleet management and invoicing system for Qatar's national
+  transport company, featuring QR scanning, photo documentation, and damage tracking.
 
 Education:
-Bachelor of Science in Computer Science
+BS Computer Software Engineering - Moringa School (2020 - 2021)

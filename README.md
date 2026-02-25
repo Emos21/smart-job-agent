@@ -1,8 +1,10 @@
-# Smart Job Agent
+# KaziAI
 
-An agentic AI system that autonomously analyzes job descriptions, matches them against your resume, and generates tailored application materials.
+*Kazi (Swahili) — work, job, career*
 
-Built with the **ReAct pattern** (Reason → Act → Observe → Loop) — the LLM reasons at runtime, selects tools, and executes multi-step workflows autonomously.
+An agentic AI career platform that autonomously searches for jobs, analyzes descriptions, scores your resume against ATS systems, rewrites application materials, and preps you for interviews — all powered by multi-agent orchestration.
+
+Built with the **ReAct pattern** (Reason → Act → Observe → Loop) — multiple specialized AI agents reason at runtime, coordinate through an orchestrator, and execute complex workflows autonomously.
 
 ## Architecture
 
