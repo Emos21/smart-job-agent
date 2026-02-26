@@ -280,27 +280,27 @@ def run_pipeline(req: PipelineRequest, user: dict = Depends(get_current_user)):
 @app.post("/api/jobs/save")
 def save_job(req: SaveJobRequest, user: dict = Depends(get_current_user)):
     """Save a job to the tracker."""
-    job_id = db.save_job(req.model_dump())
+    job_id = db.save_job(req.model_dump(), user_id=user["id"])
     return {"id": job_id, "message": "Job saved"}
 
 
 @app.get("/api/jobs")
 def list_jobs(user: dict = Depends(get_current_user)):
-    """Get all saved jobs."""
-    return db.get_jobs()
+    """Get saved jobs for the current user."""
+    return db.get_jobs(user_id=user["id"])
 
 
 @app.post("/api/applications/{job_id}")
 def create_application(job_id: int, jd_text: str = "", user: dict = Depends(get_current_user)):
     """Create an application for a saved job."""
-    app_id = db.create_application(job_id, jd_text)
+    app_id = db.create_application(job_id, jd_text, user_id=user["id"])
     return {"id": app_id, "message": "Application created"}
 
 
 @app.get("/api/applications")
 def list_applications(status: str | None = None, user: dict = Depends(get_current_user)):
-    """Get all applications, optionally filtered by status."""
-    return db.get_applications(status)
+    """Get applications for the current user, optionally filtered by status."""
+    return db.get_applications(user_id=user["id"], status=status)
 
 
 @app.patch("/api/applications/{app_id}")
@@ -309,7 +309,7 @@ def update_application(app_id: int, req: UpdateApplicationRequest, user: dict = 
     updates = {k: v for k, v in req.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
-    db.update_application(app_id, **updates)
+    db.update_application(app_id, user_id=user["id"], **updates)
     return {"message": "Updated"}
 
 

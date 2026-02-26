@@ -100,6 +100,18 @@ def init_db() -> None:
         conn.execute("ALTER TABLE users ADD COLUMN google_id TEXT")
         conn.commit()
 
+    # Migration: add user_id column to jobs if it doesn't exist
+    job_cols = [row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()]
+    if "user_id" not in job_cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN user_id INTEGER REFERENCES users(id)")
+        conn.commit()
+
+    # Migration: add user_id column to applications if it doesn't exist
+    app_cols = [row["name"] for row in conn.execute("PRAGMA table_info(applications)").fetchall()]
+    if "user_id" not in app_cols:
+        conn.execute("ALTER TABLE applications ADD COLUMN user_id INTEGER REFERENCES users(id)")
+        conn.commit()
+
     # Migrate orphaned messages (those without a conversation_id) into a "Previous Chat" conversation
     orphan = conn.execute("SELECT COUNT(*) as cnt FROM chat_history WHERE conversation_id IS NULL").fetchone()
     if orphan["cnt"] > 0:
@@ -270,15 +282,15 @@ def get_chat_history(conversation_id: int, limit: int = 50) -> list[dict]:
     return [dict(row) for row in reversed(rows)]
 
 
-# --- Jobs & Applications (unchanged) ---
+# --- Jobs & Applications (user-scoped) ---
 
-def save_job(job: dict) -> int:
+def save_job(job: dict, user_id: int | None = None) -> int:
     """Save a job to the database and return its ID."""
     conn = get_db()
     cursor = conn.execute(
         """INSERT INTO jobs (title, company, location, url, source, tags,
-           salary_min, salary_max, saved_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           salary_min, salary_max, saved_at, user_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             job.get("title", ""),
             job.get("company", ""),
@@ -289,6 +301,7 @@ def save_job(job: dict) -> int:
             job.get("salary_min"),
             job.get("salary_max"),
             datetime.now().isoformat(),
+            user_id,
         ),
     )
     conn.commit()
@@ -297,23 +310,29 @@ def save_job(job: dict) -> int:
     return job_id
 
 
-def get_jobs(limit: int = 50) -> list[dict]:
-    """Get saved jobs, most recent first."""
+def get_jobs(user_id: int | None = None, limit: int = 50) -> list[dict]:
+    """Get saved jobs for a user, most recent first."""
     conn = get_db()
-    rows = conn.execute(
-        "SELECT * FROM jobs ORDER BY saved_at DESC LIMIT ?", (limit,)
-    ).fetchall()
+    if user_id is not None:
+        rows = conn.execute(
+            "SELECT * FROM jobs WHERE user_id = ? ORDER BY saved_at DESC LIMIT ?",
+            (user_id, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM jobs ORDER BY saved_at DESC LIMIT ?", (limit,)
+        ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
 
-def create_application(job_id: int, jd_text: str = "") -> int:
+def create_application(job_id: int, jd_text: str = "", user_id: int | None = None) -> int:
     """Create a new application entry."""
     conn = get_db()
     cursor = conn.execute(
-        """INSERT INTO applications (job_id, status, jd_text, updated_at)
-           VALUES (?, 'saved', ?, ?)""",
-        (job_id, jd_text, datetime.now().isoformat()),
+        """INSERT INTO applications (job_id, status, jd_text, updated_at, user_id)
+           VALUES (?, 'saved', ?, ?, ?)""",
+        (job_id, jd_text, datetime.now().isoformat(), user_id),
     )
     conn.commit()
     app_id = cursor.lastrowid
@@ -321,9 +340,17 @@ def create_application(job_id: int, jd_text: str = "") -> int:
     return app_id
 
 
-def update_application(app_id: int, **kwargs) -> None:
-    """Update application fields."""
+def update_application(app_id: int, user_id: int | None = None, **kwargs) -> None:
+    """Update application fields. Optionally verify ownership."""
     conn = get_db()
+    if user_id is not None:
+        row = conn.execute(
+            "SELECT id FROM applications WHERE id = ? AND user_id = ?",
+            (app_id, user_id),
+        ).fetchone()
+        if not row:
+            conn.close()
+            return
     kwargs["updated_at"] = datetime.now().isoformat()
     fields = ", ".join(f"{k} = ?" for k in kwargs)
     values = list(kwargs.values()) + [app_id]
@@ -332,22 +359,28 @@ def update_application(app_id: int, **kwargs) -> None:
     conn.close()
 
 
-def get_applications(status: str | None = None) -> list[dict]:
-    """Get applications, optionally filtered by status."""
+def get_applications(user_id: int | None = None, status: str | None = None) -> list[dict]:
+    """Get applications for a user, optionally filtered by status."""
     conn = get_db()
+    query = (
+        "SELECT a.*, j.title, j.company FROM applications a "
+        "JOIN jobs j ON a.job_id = j.id "
+    )
+    conditions = []
+    params = []
+
+    if user_id is not None:
+        conditions.append("a.user_id = ?")
+        params.append(user_id)
     if status:
-        rows = conn.execute(
-            "SELECT a.*, j.title, j.company FROM applications a "
-            "JOIN jobs j ON a.job_id = j.id "
-            "WHERE a.status = ? ORDER BY a.updated_at DESC",
-            (status,),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT a.*, j.title, j.company FROM applications a "
-            "JOIN jobs j ON a.job_id = j.id "
-            "ORDER BY a.updated_at DESC"
-        ).fetchall()
+        conditions.append("a.status = ?")
+        params.append(status)
+
+    if conditions:
+        query += "WHERE " + " AND ".join(conditions) + " "
+    query += "ORDER BY a.updated_at DESC"
+
+    rows = conn.execute(query, params).fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
