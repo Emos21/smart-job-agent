@@ -8,7 +8,7 @@ const STATUS_COLUMNS = [
   { id: "saved", label: "Saved", color: "border-zinc-600" },
   { id: "applied", label: "Applied", color: "border-blue-500" },
   { id: "interview", label: "Interview", color: "border-yellow-500" },
-  { id: "offer", label: "Offer", color: "border-teal-500" },
+  { id: "offer", label: "Offer", color: "border-green-500" },
   { id: "rejected", label: "Rejected", color: "border-red-500" },
 ];
 
@@ -174,7 +174,7 @@ export default function TrackerPanel() {
                         href={job.url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="p-2 rounded-lg text-zinc-500 hover:text-teal-400 hover:bg-zinc-800"
+                        className="p-2 rounded-lg text-zinc-500 hover:text-cyan-400 hover:bg-zinc-800"
                         title="View job"
                       >
                         <ExternalLink size={14} />
@@ -183,7 +183,7 @@ export default function TrackerPanel() {
                     {!hasApp && (
                       <button
                         onClick={() => createApplication(job.id)}
-                        className="text-xs bg-zinc-800 text-zinc-400 px-3 py-1.5 rounded-lg hover:bg-teal-600 hover:text-white"
+                        className="text-xs bg-zinc-800 text-zinc-400 px-3 py-1.5 rounded-lg hover:bg-indigo-600 hover:text-white"
                       >
                         Track
                       </button>
