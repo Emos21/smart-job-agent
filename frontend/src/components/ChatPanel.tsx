@@ -148,8 +148,8 @@ export default function ChatPanel({ conversationId, onConversationCreated }: Cha
         {messages.length === 0 ? (
           /* Empty state — centered welcome */
           <div className="flex flex-col items-center justify-center h-full px-6">
-            <div className="w-12 h-12 rounded-full bg-teal-500/10 flex items-center justify-center mb-6">
-              <Bot size={24} className="text-teal-400" />
+            <div className="w-12 h-12 rounded-full bg-cyan-500/10 flex items-center justify-center mb-6">
+              <Bot size={24} className="text-cyan-400" />
             </div>
             <h2 className="text-xl font-semibold text-zinc-100 mb-1">
               How can I help you today?
@@ -180,16 +180,16 @@ export default function ChatPanel({ conversationId, onConversationCreated }: Cha
               <div key={msg.id} className="flex gap-3">
                 {msg.role === "assistant" ? (
                   <>
-                    <div className="w-7 h-7 rounded-full bg-teal-500/10 flex items-center justify-center shrink-0 mt-0.5">
-                      <Bot size={14} className="text-teal-400" />
+                    <div className="w-7 h-7 rounded-full bg-cyan-500/10 flex items-center justify-center shrink-0 mt-0.5">
+                      <Bot size={14} className="text-cyan-400" />
                     </div>
-                    <div className="flex-1 text-sm text-zinc-200 leading-relaxed prose prose-invert prose-sm max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0 prose-headings:text-zinc-100 prose-strong:text-zinc-100 prose-code:text-teal-300 prose-code:bg-zinc-800 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-800">
+                    <div className="flex-1 text-sm text-zinc-200 leading-relaxed prose prose-invert prose-sm max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0 prose-headings:text-zinc-100 prose-strong:text-zinc-100 prose-code:text-cyan-300 prose-code:bg-zinc-800 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-800">
                       <ReactMarkdown>{msg.content}</ReactMarkdown>
                     </div>
                   </>
                 ) : (
                   <div className="ml-auto max-w-[80%]">
-                    <div className="bg-teal-600 text-white rounded-2xl rounded-br-sm px-4 py-2.5 text-sm">
+                    <div className="bg-indigo-600 text-white rounded-2xl rounded-br-sm px-4 py-2.5 text-sm">
                       {msg.content}
                     </div>
                   </div>
@@ -198,8 +198,8 @@ export default function ChatPanel({ conversationId, onConversationCreated }: Cha
             ))}
             {loading && (
               <div className="flex gap-3">
-                <div className="w-7 h-7 rounded-full bg-teal-500/10 flex items-center justify-center shrink-0">
-                  <Bot size={14} className="text-teal-400" />
+                <div className="w-7 h-7 rounded-full bg-cyan-500/10 flex items-center justify-center shrink-0">
+                  <Bot size={14} className="text-cyan-400" />
                 </div>
                 <div className="text-sm text-zinc-500 py-2">
                   <span className="inline-flex gap-1">
@@ -248,7 +248,7 @@ export default function ChatPanel({ conversationId, onConversationCreated }: Cha
             <button
               type="submit"
               disabled={loading || !input.trim()}
-              className="p-2 rounded-lg bg-teal-600 text-white disabled:opacity-30 disabled:cursor-not-allowed hover:bg-teal-500"
+              className="p-2 rounded-lg bg-indigo-600 text-white disabled:opacity-30 disabled:cursor-not-allowed hover:bg-indigo-500"
             >
               <ArrowUp size={16} />
             </button>
