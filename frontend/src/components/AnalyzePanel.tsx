@@ -68,7 +68,7 @@ export default function AnalyzePanel() {
     <div className="flex flex-col h-full">
       <PanelHeader
         title="Job Analysis"
-        subtitle="Paste a job description to get ATS score and skills match"
+        subtitle="Paste a job description and your resume to get ATS score and skills match"
       />
 
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
