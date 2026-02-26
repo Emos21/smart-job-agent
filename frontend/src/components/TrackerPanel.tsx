@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { ExternalLink } from "lucide-react";
 import PanelHeader from "./PanelHeader";
+import { apiFetch } from "../lib/api";
 import type { Job, Application } from "../types";
 
 const STATUS_COLUMNS = [
@@ -17,11 +18,11 @@ export default function TrackerPanel() {
   const [view, setView] = useState<"board" | "list">("board");
 
   useEffect(() => {
-    fetch("/api/jobs")
+    apiFetch("/api/jobs")
       .then((r) => r.json())
       .then(setJobs)
       .catch(() => {});
-    fetch("/api/applications")
+    apiFetch("/api/applications")
       .then((r) => r.json())
       .then(setApplications)
       .catch(() => {});
@@ -29,8 +30,8 @@ export default function TrackerPanel() {
 
   async function createApplication(jobId: number) {
     try {
-      await fetch(`/api/applications/${jobId}`, { method: "POST" });
-      const apps = await fetch("/api/applications").then((r) => r.json());
+      await apiFetch(`/api/applications/${jobId}`, { method: "POST" });
+      const apps = await apiFetch("/api/applications").then((r) => r.json());
       setApplications(apps);
     } catch {
       /* ignore */
@@ -39,9 +40,8 @@ export default function TrackerPanel() {
 
   async function updateStatus(appId: number, status: string) {
     try {
-      await fetch(`/api/applications/${appId}`, {
+      await apiFetch(`/api/applications/${appId}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status }),
       });
       setApplications((prev) =>
