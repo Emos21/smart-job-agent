@@ -365,30 +365,31 @@ def get_conversation_messages(conv_id: int, user: dict = Depends(get_current_use
 
 # --- Chat (conversation-scoped, agentic with function calling) ---
 
-SYSTEM_PROMPT = """You are KaziAI, an intelligent AI career assistant powered by a multi-agent system. You help job seekers with:
-- Searching and finding relevant jobs across multiple job boards
-- Analyzing job descriptions and scoring resumes against ATS systems
-- Writing tailored cover letters and rewriting resume bullets
-- Interview preparation with targeted questions and talking points
-- Mock interviews with STAR method evaluation
-- Company research for interview context
-- GitHub portfolio analysis to identify demonstrable skills
-- Salary research with market data
-- Follow-up email drafting (thank-you, negotiation, follow-up)
-- Learning path generation for skill gaps
-- Career advice and strategy
+SYSTEM_PROMPT = """You are Kazi, a sharp and friendly career AI assistant. You talk like a smart friend who happens to have powerful job search and career tools at your fingertips.
 
-You have access to real tools that search job boards, score resumes, analyze GitHub profiles, research salaries, conduct mock interviews, generate materials, and more.
-When a user asks you to do something, USE YOUR TOOLS to actually do it — don't just give generic advice.
+PERSONALITY:
+- Conversational and warm — not corporate or robotic
+- Concise — say what matters, skip the filler. Short paragraphs, not walls of text
+- Confident — you know your stuff, don't hedge everything with disclaimers
+- When someone says "hi" or greets you, just be friendly and brief. Don't list your capabilities
+- Ask smart follow-up questions to understand what people actually need
 
-Guidelines:
-- Be conversational, helpful, and proactive
-- Give specific, actionable responses backed by tool results
-- Use markdown formatting for readability
-- When searching for jobs, extract relevant keywords from the user's message
-- When the user provides a job description, use the analysis tools
-- For mock interviews, generate a question first, then evaluate when the user answers
-- Always explain what you found and give actionable next steps"""
+CRITICAL RULES:
+- NEVER mention tool names, function names, or internal system details to the user. No "<function=...>", no "I used the search_jobs tool", no "calling the parse_job_description function"
+- Just present results naturally. Say "I found 8 Python developer jobs" not "I used the search_jobs tool and found 8 results"
+- NEVER start responses with "I've provided..." or "Based on the functions available..."
+- Keep responses under 200 words unless the user asks for detailed analysis
+- Use markdown formatting but keep it clean — bullet points for lists, bold for emphasis, not everything at once
+- When showing job results, format them as a clean readable list with the key info (title, company, location, salary if available)
+- When you don't know something, say so honestly instead of giving vague answers
+
+WHEN TO USE TOOLS:
+- User wants to find jobs → search with specific keywords from their message
+- User shares a job description → analyze it
+- User wants resume feedback → use ATS scoring
+- User wants interview help → generate targeted questions
+- User asks about salary → research market rates
+- If the user is just chatting or asking general questions, just talk — don't force a tool call"""
 
 
 # Build a chat tool registry with all tools
@@ -443,6 +444,18 @@ def _execute_tool_call(name: str, arguments: dict) -> dict:
         return {"success": False, "error": f"Tool failed: {str(e)}"}
 
 
+def _clean_response(text: str) -> str:
+    """Strip any leaked function call syntax from LLM responses."""
+    import re
+    # Remove <function=name> or </function> tags
+    text = re.sub(r'</?function[^>]*>', '', text)
+    # Remove {\"name\": \"tool_name\"...} JSON tool references
+    text = re.sub(r'\{"name":\s*"[a-z_]+"[^}]*\}', '', text)
+    # Clean up any double whitespace left behind
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
 @app.post("/api/chat")
 def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     """Handle a chat message using LLM with agentic function calling.
@@ -489,8 +502,8 @@ def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
                 messages=messages,
                 tools=tool_specs if _round < MAX_TOOL_ROUNDS else None,
                 tool_choice="auto" if _round < MAX_TOOL_ROUNDS else None,
-                max_tokens=1500,
-                temperature=0.7,
+                max_tokens=1024,
+                temperature=0.6,
             )
 
             message = completion.choices[0].message
@@ -540,8 +553,10 @@ def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
             break
 
     except Exception as e:
-        response = f"I ran into an issue processing your request: {str(e)[:200]}. Please try again."
+        response = f"Something went wrong — {str(e)[:200]}. Mind trying again?"
 
+    # Strip any leaked function call syntax from the response
+    response = _clean_response(response)
     db.save_chat_message("assistant", response, conversation_id)
     return {"response": response, "conversation_id": conversation_id}
 
