@@ -77,7 +77,7 @@ export default function SearchPanel() {
           <button
             type="submit"
             disabled={loading || !keywords.trim()}
-            className="px-5 bg-teal-600 text-white rounded-xl text-sm font-medium hover:bg-teal-500 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-5 bg-indigo-600 text-white rounded-xl text-sm font-medium hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {loading ? "Searching..." : "Search"}
           </button>
@@ -117,7 +117,7 @@ export default function SearchPanel() {
                             href={job.url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="hover:text-teal-400"
+                            className="hover:text-cyan-400"
                           >
                             {job.title}
                           </a>
@@ -129,7 +129,7 @@ export default function SearchPanel() {
                         {job.company} — {job.location}
                       </p>
                       {(job.salary_min || job.salary_max) && (
-                        <p className="text-xs text-teal-400 mt-1">
+                        <p className="text-xs text-cyan-400 mt-1">
                           {job.salary_min && job.salary_max
                             ? `$${job.salary_min.toLocaleString()} - $${job.salary_max.toLocaleString()}`
                             : job.salary_min
@@ -152,7 +152,7 @@ export default function SearchPanel() {
                     <button
                       onClick={() => saveJob(job, i)}
                       disabled={saving === i}
-                      className="ml-3 p-2 rounded-lg text-zinc-500 hover:text-teal-400 hover:bg-zinc-800 disabled:opacity-50"
+                      className="ml-3 p-2 rounded-lg text-zinc-500 hover:text-cyan-400 hover:bg-zinc-800 disabled:opacity-50"
                       title="Save job"
                     >
                       <Bookmark size={16} />
