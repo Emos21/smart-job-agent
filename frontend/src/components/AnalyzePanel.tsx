@@ -1,18 +1,26 @@
 import { useState } from "react";
-import { BarChart3 } from "lucide-react";
+import { BarChart3, Upload } from "lucide-react";
 import PanelHeader from "./PanelHeader";
 import { apiFetch } from "../lib/api";
 import type { AnalysisResult } from "../types";
 
 export default function AnalyzePanel() {
   const [jdText, setJdText] = useState("");
+  const [resumeText, setResumeText] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState("");
 
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    setResumeText(text);
+  }
+
   async function analyze(e: React.FormEvent) {
     e.preventDefault();
-    if (!jdText.trim() || loading) return;
+    if (!jdText.trim() || !resumeText.trim() || loading) return;
 
     setLoading(true);
     setError("");
@@ -21,7 +29,7 @@ export default function AnalyzePanel() {
     try {
       const res = await apiFetch("/api/analyze", {
         method: "POST",
-        body: JSON.stringify({ jd_text: jdText }),
+        body: JSON.stringify({ jd_text: jdText, resume_text: resumeText }),
       });
       if (!res.ok) {
         const err = await res.json();
@@ -64,18 +72,43 @@ export default function AnalyzePanel() {
       />
 
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-        <form onSubmit={analyze} className="max-w-3xl">
-          <textarea
-            value={jdText}
-            onChange={(e) => setJdText(e.target.value)}
-            placeholder="Paste the full job description here..."
-            rows={8}
-            className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-700 resize-y"
-          />
+        <form onSubmit={analyze} className="max-w-3xl space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-zinc-400 mb-1.5">Job Description</label>
+            <textarea
+              value={jdText}
+              onChange={(e) => setJdText(e.target.value)}
+              placeholder="Paste the full job description here..."
+              rows={6}
+              className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-700 resize-y"
+            />
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-medium text-zinc-400">Your Resume</label>
+              <label className="flex items-center gap-1.5 text-xs text-teal-400 cursor-pointer hover:text-teal-300">
+                <Upload size={12} />
+                <span>Upload .txt</span>
+                <input
+                  type="file"
+                  accept=".txt,.md,.text"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+              </label>
+            </div>
+            <textarea
+              value={resumeText}
+              onChange={(e) => setResumeText(e.target.value)}
+              placeholder="Paste your resume text here or upload a .txt file..."
+              rows={6}
+              className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-700 resize-y"
+            />
+          </div>
           <button
             type="submit"
-            disabled={loading || !jdText.trim()}
-            className="mt-2 px-5 py-2.5 bg-teal-600 text-white rounded-xl text-sm font-medium hover:bg-teal-500 disabled:opacity-40 disabled:cursor-not-allowed"
+            disabled={loading || !jdText.trim() || !resumeText.trim()}
+            className="px-5 py-2.5 bg-teal-600 text-white rounded-xl text-sm font-medium hover:bg-teal-500 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {loading ? "Analyzing..." : "Analyze Against Resume"}
           </button>
