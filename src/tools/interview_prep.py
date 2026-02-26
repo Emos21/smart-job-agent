@@ -43,9 +43,10 @@ class InterviewPrepTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Generate likely interview questions based on a job description "
-            "and candidate background. Produces technical, behavioral, and "
-            "situational questions with suggested talking points."
+            "Generate interview preparation questions and talking points. "
+            "Use when user asks for help preparing for an interview, wants "
+            "practice questions, or mentions an upcoming interview. "
+            "Produces technical, behavioral, and situational questions."
         )
 
     @property

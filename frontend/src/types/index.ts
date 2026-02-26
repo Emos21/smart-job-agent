@@ -104,6 +104,7 @@ export interface UserProfile {
   linkedin_url: string;
   github_username: string;
   location: string;
+  auto_suggestions?: boolean;
 }
 
 export interface UserResume {
@@ -132,7 +133,9 @@ export interface Goal {
   user_id: number;
   title: string;
   description: string;
-  status: "active" | "paused" | "completed" | "abandoned";
+  status: "active" | "paused" | "completed" | "abandoned" | "suggested" | "dismissed";
+  origin?: "user" | "agent_suggested";
+  trigger_type?: string;
   created_at: string;
   updated_at: string;
 }
@@ -196,4 +199,41 @@ export interface Notification {
 
 export interface TraceIdsEvent {
   ids: number[];
+}
+
+export interface AutonomousTask {
+  id: number;
+  user_id: number;
+  task_type: string;
+  celery_task_id: string;
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  config: string;
+  state: string;
+  result_summary: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskResult {
+  id: number;
+  task_id: number;
+  result_type: string;
+  data: string;
+  created_at: string;
+}
+
+export interface NegotiationRoundEvent {
+  round: number;
+  agent: string;
+  response_type: "position" | "concede" | "counter" | "request_data";
+  position: string;
+  confidence: number;
+}
+
+export interface NegotiationResultEvent {
+  consensus_reached: boolean;
+  final_position: string;
+  confidence: number;
+  dissenting_views: string[];
+  rounds_taken: number;
 }

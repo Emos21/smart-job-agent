@@ -21,8 +21,9 @@ class CompanyResearcherTool(Tool):
     def description(self) -> str:
         return (
             "Research a company by fetching its website content. "
-            "Provide a company name or URL to get an overview of "
-            "what the company does, its mission, and key details."
+            "Use when user asks about a company, wants to prepare for "
+            "an interview at a specific company, or mentions a company name. "
+            "Returns the company's mission, products, and key details."
         )
 
     @property

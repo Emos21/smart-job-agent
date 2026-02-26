@@ -3,9 +3,7 @@ import ReactMarkdown from "react-markdown";
 import { Bot, ArrowUp, Mic, MicOff, Briefcase, FileText, Target, MessageSquare, Paperclip, X, CheckCircle2, XCircle, Loader2, Lightbulb, Square, ChevronDown, ChevronRight, ThumbsUp, ThumbsDown } from "lucide-react";
 import { useSpeechRecognition } from "../hooks/useSpeechRecognition";
 import { apiFetch, getToken } from "../lib/api";
-import type { ChatMessage, AgentActivity, EvaluatorEvent, AgentReasoningEvent } from "../types";
-
-import type { Suggestion } from "../types";
+import type { ChatMessage, AgentActivity, EvaluatorEvent, AgentReasoningEvent, NegotiationRoundEvent, NegotiationResultEvent, Suggestion } from "../types";
 
 const defaultSuggestions = [
   { icon: Briefcase, label: "Search for jobs", prompt: "Search for senior React developer jobs" },
@@ -30,6 +28,9 @@ export default function ChatPanel({ conversationId, onConversationCreated }: Cha
   const [evaluatorDecisions, setEvaluatorDecisions] = useState<EvaluatorEvent[]>([]);
   const [agentReasoning, setAgentReasoning] = useState<AgentReasoningEvent[]>([]);
   const [reasoningExpanded, setReasoningExpanded] = useState(false);
+  const [negotiationRounds, setNegotiationRounds] = useState<NegotiationRoundEvent[]>([]);
+  const [negotiationResult, setNegotiationResult] = useState<NegotiationResultEvent | null>(null);
+  const [debateExpanded, setDebateExpanded] = useState(false);
   const [pendingTraceIds, setPendingTraceIds] = useState<number[]>([]);
   const [feedbackGiven, setFeedbackGiven] = useState<Record<number, string>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -133,6 +134,9 @@ export default function ChatPanel({ conversationId, onConversationCreated }: Cha
     setEvaluatorDecisions([]);
     setAgentReasoning([]);
     setReasoningExpanded(false);
+    setNegotiationRounds([]);
+    setNegotiationResult(null);
+    setDebateExpanded(false);
     setPendingTraceIds([]);
 
     const displayContent = currentFile
@@ -229,6 +233,10 @@ export default function ChatPanel({ conversationId, onConversationCreated }: Cha
               setToolStatus(event.status);
             } else if (event.type === "trace_ids") {
               setPendingTraceIds(event.ids || []);
+            } else if (event.type === "negotiation_round") {
+              setNegotiationRounds((prev) => [...prev, event as NegotiationRoundEvent]);
+            } else if (event.type === "negotiation_result") {
+              setNegotiationResult(event as NegotiationResultEvent);
             } else if (event.type === "content") {
               setToolStatus(null);
               updateStreamingMessage(event.text);
@@ -497,6 +505,47 @@ export default function ChatPanel({ conversationId, onConversationCreated }: Cha
                           {r.tool && <span className="text-zinc-700 ml-1">→ {r.tool}</span>}
                         </div>
                       ))}
+                    </div>
+                  )}
+                  {/* Agent Debate (Negotiation) */}
+                  {negotiationRounds.length > 0 && (
+                    <div className="space-y-1">
+                      <button
+                        onClick={() => setDebateExpanded(!debateExpanded)}
+                        className="flex items-center gap-1 text-xs text-amber-400/80 hover:text-amber-300"
+                      >
+                        {debateExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+                        Agent Debate ({negotiationRounds.length} positions)
+                      </button>
+                      {debateExpanded && (
+                        <div className="space-y-1 pl-3 border-l border-amber-500/20">
+                          {negotiationRounds.map((nr, i) => (
+                            <div key={i} className="text-xs bg-amber-500/5 border border-amber-500/10 rounded px-2 py-1">
+                              <span className="text-amber-400 capitalize font-medium">R{nr.round} {nr.agent}</span>
+                              <span className="text-zinc-500 ml-1">[{nr.response_type}]</span>
+                              <span className="text-zinc-600 ml-1">({Math.round(nr.confidence * 100)}%)</span>
+                              <p className="text-zinc-400 mt-0.5">{nr.position.slice(0, 200)}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {negotiationResult && (
+                        <div className={`text-xs rounded px-2 py-1.5 ${
+                          negotiationResult.consensus_reached
+                            ? "bg-emerald-500/5 border border-emerald-500/20 text-emerald-400"
+                            : "bg-amber-500/5 border border-amber-500/20 text-amber-400"
+                        }`}>
+                          {negotiationResult.consensus_reached
+                            ? `Consensus reached (${negotiationResult.rounds_taken} rounds, ${Math.round(negotiationResult.confidence * 100)}% confidence)`
+                            : `No consensus after ${negotiationResult.rounds_taken} rounds — using highest confidence position`
+                          }
+                          {negotiationResult.dissenting_views.length > 0 && (
+                            <p className="text-zinc-500 mt-0.5 text-[10px]">
+                              Dissent: {negotiationResult.dissenting_views.join("; ").slice(0, 200)}
+                            </p>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

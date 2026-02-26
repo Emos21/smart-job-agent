@@ -31,8 +31,9 @@ class JobSearchTool(Tool):
     def description(self) -> str:
         return (
             "Search for jobs matching given keywords and skills. "
-            "Returns job titles, companies, tags, and application URLs. "
-            "Searches across multiple free job boards (RemoteOK, Arbeitnow)."
+            "Use when user wants to find job openings, asks about available "
+            "positions, or wants to explore the job market. "
+            "Returns titles, companies, tags, and application URLs from multiple job boards."
         )
 
     @property

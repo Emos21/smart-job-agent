@@ -1,5 +1,10 @@
 const TOKEN_KEY = "kaziai_token";
 
+export function getWsUrl(): string {
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${window.location.host}/ws`;
+}
+
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
@@ -27,7 +32,7 @@ export async function apiFetch(
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
-  if (!headers.has("Content-Type") && options.body) {
+  if (!headers.has("Content-Type") && options.body && typeof options.body === "string") {
     headers.set("Content-Type", "application/json");
   }
 

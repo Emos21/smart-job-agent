@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   BookOpen,
   Target,
+  Cog,
   Plus,
   PanelLeftClose,
   PanelLeftOpen,
@@ -41,6 +42,7 @@ const tabs = [
   { id: "analyze", label: "Analyze", icon: BarChart3 },
   { id: "tracker", label: "Tracker", icon: ClipboardList },
   { id: "learn", label: "Learn", icon: BookOpen },
+  { id: "tasks", label: "Tasks", icon: Cog },
   { id: "profile", label: "Profile", icon: UserIcon },
 ];
 

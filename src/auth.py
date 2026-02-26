@@ -91,3 +91,16 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return user
+
+
+def get_current_user_from_token(token: str) -> dict | None:
+    """Validate a raw JWT token and return user dict, or None on failure.
+
+    Unlike get_current_user, this doesn't raise exceptions — used by WebSocket auth.
+    """
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        user_id = int(payload["sub"])
+        return db.get_user_by_id(user_id)
+    except Exception:
+        return None

@@ -8,6 +8,7 @@ Creates notifications so the system acts without user input.
 """
 
 import os
+import asyncio
 from datetime import datetime, timedelta
 
 from . import database as db
@@ -65,6 +66,14 @@ def check_stalled_goals() -> None:
             data=json.dumps({"goal_id": goal_id}),
         )
 
+        # Push via WebSocket
+        _ws_notify(user_id, {
+            "type": "notification",
+            "notification_type": "goal_stalled",
+            "title": "Goal needs attention",
+            "message": f'Your goal "{title}" has pending steps with no progress in 24+ hours.',
+        })
+
     conn.close()
 
 
@@ -105,7 +114,28 @@ def check_stale_applications() -> None:
             data=json.dumps({"application_id": app_id}),
         )
 
+        # Push via WebSocket
+        _ws_notify(user_id, {
+            "type": "notification",
+            "notification_type": "application_reminder",
+            "title": "Follow up on application",
+            "message": f'Your application for "{title}" at {company} has been pending for over a week.',
+        })
+
     conn.close()
+
+
+def _ws_notify(user_id: int, data: dict) -> None:
+    """Push a WebSocket notification to a user (fire-and-forget)."""
+    try:
+        from .websocket_manager import ws_manager
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.ensure_future(ws_manager.send_to_user(user_id, data))
+        else:
+            loop.run_until_complete(ws_manager.send_to_user(user_id, data))
+    except Exception:
+        pass  # WebSocket push is best-effort
 
 
 def start_scheduler() -> None:

@@ -2,7 +2,7 @@ import os
 import json
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
@@ -34,6 +34,7 @@ from .agents.orchestrator import Orchestrator
 from .agents.router import AgentRouter, RoutingDecision
 from .agents.planner import GoalPlanner
 from .episodic_memory import EpisodicMemory
+from .websocket_manager import ws_manager, authenticate_ws
 
 load_dotenv()
 
@@ -1196,6 +1197,10 @@ def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
                     yield f"data: {json.dumps({'type': 'agent_reasoning', **event_data})}\n\n"
                 elif event_type == "trace_ids":
                     yield f"data: {json.dumps({'type': 'trace_ids', **event_data})}\n\n"
+                elif event_type == "negotiation_round":
+                    yield f"data: {json.dumps({'type': 'negotiation_round', **event_data})}\n\n"
+                elif event_type == "negotiation_result":
+                    yield f"data: {json.dumps({'type': 'negotiation_result', **event_data})}\n\n"
                 elif event_type == "content":
                     yield f"data: {json.dumps({'type': 'content', **event_data})}\n\n"
 
@@ -1412,6 +1417,159 @@ def get_suggestions(user: dict = Depends(get_current_user)):
     from .suggestions import SuggestionEngine
     engine = SuggestionEngine(user["id"])
     return engine.generate()
+
+
+# --- WebSocket Real-Time Push (Gap 1) ---
+
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket):
+    """WebSocket endpoint for real-time push notifications.
+
+    Auth: first message must be {"type": "auth", "token": "..."}.
+    After auth, keeps connection alive with heartbeat pings.
+    """
+    await ws.accept()
+    user_id = await authenticate_ws(ws)
+    if user_id is None:
+        await ws.close(code=4001)
+        return
+
+    # Re-register with manager (authenticate_ws already accepted)
+    if user_id not in ws_manager._connections:
+        ws_manager._connections[user_id] = []
+    ws_manager._connections[user_id].append(ws)
+
+    try:
+        while True:
+            raw = await ws.receive_text()
+            try:
+                msg = json.loads(raw)
+                msg_type = msg.get("type")
+
+                if msg_type == "ping":
+                    await ws.send_json({"type": "pong"})
+                elif msg_type == "cancel" and msg.get("conversation_id"):
+                    # Cancel active dispatch via WebSocket
+                    conv_id = msg["conversation_id"]
+                    state = _active_dispatches.get(conv_id)
+                    if state:
+                        state["cancel_requested"] = True
+                        await ws.send_json({"type": "cancel_ack", "conversation_id": conv_id})
+            except json.JSONDecodeError:
+                pass
+    except WebSocketDisconnect:
+        pass
+    finally:
+        ws_manager.disconnect(ws, user_id)
+
+
+# --- Autonomous Tasks (Gap 5) ---
+
+class LaunchTaskRequest(BaseModel):
+    task_type: str  # "job_monitor", "app_tracker", "company_deep_dive"
+    config: dict = {}
+
+
+@app.post("/api/tasks")
+def launch_task(req: LaunchTaskRequest, user: dict = Depends(get_current_user)):
+    """Launch an autonomous background task."""
+    task_db_id = db.create_autonomous_task(
+        user_id=user["id"],
+        task_type=req.task_type,
+        config=json.dumps(req.config),
+    )
+
+    # Dispatch to Celery
+    celery_task_id = None
+    try:
+        if req.task_type == "company_deep_dive":
+            company = req.config.get("company_name", "Unknown")
+            from .tasks.company_deep_dive import research_company
+            result = research_company.delay(
+                user_id=user["id"],
+                company_name=company,
+                task_db_id=task_db_id,
+            )
+            celery_task_id = result.id
+        elif req.task_type == "job_monitor":
+            from .tasks.job_monitor import monitor_jobs_for_all_users
+            result = monitor_jobs_for_all_users.delay()
+            celery_task_id = result.id
+        elif req.task_type == "app_tracker":
+            from .tasks.app_tracker import track_all_applications
+            result = track_all_applications.delay()
+            celery_task_id = result.id
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown task type: {req.task_type}")
+
+        if celery_task_id:
+            db.update_autonomous_task(task_db_id, celery_task_id=celery_task_id, status="running")
+    except ImportError:
+        # Celery/Redis not available — mark as failed
+        db.update_autonomous_task(task_db_id, status="failed")
+        raise HTTPException(status_code=503, detail="Task queue not available (Redis/Celery not running)")
+
+    return {"task_id": task_db_id, "celery_task_id": celery_task_id, "status": "running"}
+
+
+@app.get("/api/tasks")
+def list_tasks(status: str | None = None, user: dict = Depends(get_current_user)):
+    """List autonomous tasks for the current user."""
+    return db.get_user_tasks(user["id"], status=status)
+
+
+@app.get("/api/tasks/{task_id}")
+def get_task(task_id: int, user: dict = Depends(get_current_user)):
+    """Get status of a specific autonomous task."""
+    task = db.get_autonomous_task(task_id)
+    if not task or task["user_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="Task not found")
+    results = db.get_task_results(task_id)
+    return {**task, "results": results}
+
+
+@app.delete("/api/tasks/{task_id}")
+def cancel_task(task_id: int, user: dict = Depends(get_current_user)):
+    """Cancel a running autonomous task."""
+    task = db.get_autonomous_task(task_id)
+    if not task or task["user_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if task["status"] == "running" and task.get("celery_task_id"):
+        try:
+            from .celery_app import celery_app as celery
+            celery.control.revoke(task["celery_task_id"], terminate=True)
+        except Exception:
+            pass
+
+    db.update_autonomous_task(task_id, status="cancelled")
+    return {"message": "Task cancelled"}
+
+
+# --- Goal Suggestions (Gap 3) ---
+
+@app.get("/api/goals/suggested")
+def get_suggested_goals(user: dict = Depends(get_current_user)):
+    """Get agent-suggested goals awaiting approval."""
+    return db.get_suggested_goals(user["id"])
+
+
+@app.post("/api/goals/{goal_id}/approve")
+def approve_suggested_goal(goal_id: int, user: dict = Depends(get_current_user)):
+    """Approve a suggested goal — makes it active."""
+    updated = db.approve_goal(goal_id, user["id"])
+    if not updated:
+        raise HTTPException(status_code=404, detail="Suggested goal not found")
+    return {"message": "Goal approved and activated"}
+
+
+@app.post("/api/goals/{goal_id}/dismiss")
+def dismiss_suggested_goal(goal_id: int, user: dict = Depends(get_current_user)):
+    """Dismiss a suggested goal."""
+    updated = db.dismiss_goal(goal_id, user["id"])
+    if not updated:
+        raise HTTPException(status_code=404, detail="Suggested goal not found")
+    return {"message": "Goal dismissed"}
 
 
 # Serve React frontend for all non-API routes

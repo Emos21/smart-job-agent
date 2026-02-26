@@ -9,9 +9,11 @@ import DashboardPanel from "./components/DashboardPanel";
 import LearningPanel from "./components/LearningPanel";
 import GoalsPanel from "./components/GoalsPanel";
 import NotificationPanel from "./components/NotificationPanel";
+import TasksPanel from "./components/TasksPanel";
 import AuthPage from "./components/AuthPage";
 import type { Conversation, User } from "./types";
 import { apiFetch, getToken, clearToken, setOnUnauthorized } from "./lib/api";
+import { useWebSocket } from "./hooks/useWebSocket";
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -65,21 +67,42 @@ export default function App() {
     fetchConversations();
   }, [fetchConversations]);
 
-  // Poll for unread notification count every 30s when logged in
+  // WebSocket for real-time push (replaces 30s polling)
+  const { lastMessage, isConnected } = useWebSocket(user ? getToken() : null);
+
+  // Handle incoming WebSocket messages
+  useEffect(() => {
+    if (!lastMessage || typeof lastMessage !== "object") return;
+    const msg = lastMessage as Record<string, unknown>;
+
+    if (msg.type === "notification") {
+      setUnreadCount((c) => c + 1);
+    } else if (msg.type === "task_update") {
+      // Task state updates handled by TasksPanel
+    }
+  }, [lastMessage]);
+
+  // Fetch initial unread count on login (one-time, not polling)
   useEffect(() => {
     if (!user) return;
+    apiFetch("/api/notifications/count")
+      .then((r) => r.json())
+      .then((data) => setUnreadCount(data.count))
+      .catch(() => {});
+  }, [user]);
 
-    function fetchCount() {
+  // Fallback: poll every 60s only if WebSocket is disconnected
+  useEffect(() => {
+    if (!user || isConnected) return;
+
+    const interval = setInterval(() => {
       apiFetch("/api/notifications/count")
         .then((r) => r.json())
         .then((data) => setUnreadCount(data.count))
         .catch(() => {});
-    }
-
-    fetchCount();
-    const interval = setInterval(fetchCount, 30000);
+    }, 60000);
     return () => clearInterval(interval);
-  }, [user]);
+  }, [user, isConnected]);
 
   function handleNewChat() {
     setActiveConversationId(null);
@@ -177,6 +200,7 @@ export default function App() {
         {activeTab === "analyze" && <AnalyzePanel />}
         {activeTab === "tracker" && <TrackerPanel />}
         {activeTab === "learn" && <LearningPanel />}
+        {activeTab === "tasks" && <TasksPanel />}
         {activeTab === "profile" && <ProfilePanel />}
       </main>
     </div>

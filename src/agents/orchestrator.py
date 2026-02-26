@@ -90,6 +90,7 @@ class Orchestrator:
         # Import evaluator (Phase 2) and learner (Phase 5) if available
         evaluator = None
         learner = None
+        rl_trainer = None
         try:
             from .evaluator import PipelineEvaluator
             evaluator = PipelineEvaluator()
@@ -98,6 +99,13 @@ class Orchestrator:
         try:
             from .learner import AgentLearner
             learner = AgentLearner()
+        except ImportError:
+            pass
+
+        # Load RL trainer for tool hints (Phase 8)
+        try:
+            from ..rl.trainer import RLTrainer
+            rl_trainer = RLTrainer()
         except ImportError:
             pass
 
@@ -157,6 +165,18 @@ class Orchestrator:
                 except Exception:
                     pass
 
+            # Get RL tool hints (Phase 8)
+            rl_hints = ""
+            if rl_trainer and user_id:
+                try:
+                    rl_hints = rl_trainer.get_tool_hints(user_id, {
+                        "query": user_message,
+                        "agent_name": agent_name,
+                        "profile": profile,
+                    })
+                except Exception:
+                    pass
+
             # Create trace for this agent run
             trace_id = None
             if user_id:
@@ -206,6 +226,7 @@ class Orchestrator:
                 message_bus=bus,
                 cancel_check=cancel_check,
                 on_thought=thought_cb,
+                rl_hints=rl_hints,
             )
 
             # Post result to message bus as structured response
@@ -302,6 +323,39 @@ class Orchestrator:
                 if target and target not in remaining_agents and target in self.AGENT_FACTORIES:
                     remaining_agents.insert(0, target)
 
+        # After all agents complete, run conflict detection and negotiation (Phase 8)
+        try:
+            from .negotiation import ConflictDetector, NegotiationSession
+            detector = ConflictDetector()
+            conflicts = detector.detect_conflicts(bus)
+
+            if conflicts:
+                for conflict in conflicts[:1]:  # Handle first conflict only
+                    session = NegotiationSession(
+                        conflict=conflict,
+                        bus=bus,
+                        conversation_id=conversation_id,
+                    )
+                    consensus = session.run()
+
+                    # Post consensus to bus
+                    bus.send(AgentMessage(
+                        sender="negotiator",
+                        receiver="orchestrator",
+                        msg_type="consensus",
+                        payload={
+                            "reached": consensus.reached,
+                            "position": consensus.position,
+                            "confidence": consensus.confidence,
+                            "dissenting_views": consensus.dissenting_views,
+                            "rounds_taken": consensus.rounds_taken,
+                        },
+                    ))
+        except ImportError:
+            pass
+        except Exception:
+            pass
+
         return self._results
 
     def _build_agent_task(
@@ -379,6 +433,7 @@ class Orchestrator:
         message_bus: MessageBus | None = None,
         cancel_check: Callable[[], bool] | None = None,
         on_thought: Callable[[str, str], None] | None = None,
+        rl_hints: str = "",
     ) -> AgentResult:
         """Run a single agent and capture its result."""
         try:
@@ -388,6 +443,7 @@ class Orchestrator:
                 message_bus=message_bus,
                 cancel_check=cancel_check,
                 on_thought=on_thought,
+                rl_hints=rl_hints,
             )
             result = AgentResult(
                 agent_name=agent.name,

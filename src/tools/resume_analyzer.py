@@ -18,8 +18,9 @@ class ResumeAnalyzerTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Read a resume from a file and extract its content for analysis. "
-            "Returns the structured text content of the resume."
+            "Analyze resume content. Use when user shares their resume or CV "
+            "and wants feedback on structure, content, or ATS readiness. "
+            "Reads a resume file and extracts structured sections."
         )
 
     @property

@@ -228,6 +228,106 @@ def init_db() -> None:
     """)
     conn.commit()
 
+    # --- Phase 8 tables ---
+
+    # RL training log
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS rl_training_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER REFERENCES users(id),
+            samples_trained INTEGER DEFAULT 0,
+            accuracy REAL,
+            trained_at TEXT NOT NULL
+        )
+    """)
+
+    # Autonomous tasks (Celery)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS autonomous_tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER REFERENCES users(id),
+            task_type TEXT NOT NULL,
+            celery_task_id TEXT DEFAULT '',
+            status TEXT DEFAULT 'pending',
+            config TEXT DEFAULT '{}',
+            state TEXT DEFAULT '',
+            result_summary TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
+    # Task results
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS task_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER REFERENCES autonomous_tasks(id) ON DELETE CASCADE,
+            result_type TEXT NOT NULL,
+            data TEXT DEFAULT '{}',
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    # Goal suggestion log (anti-spam tracking)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS goal_suggestion_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER REFERENCES users(id),
+            trigger_type TEXT NOT NULL,
+            cooldown_key TEXT NOT NULL,
+            confidence REAL DEFAULT 0.0,
+            goal_id INTEGER,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    # Negotiation sessions
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS negotiation_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id INTEGER,
+            topic TEXT NOT NULL,
+            agents TEXT DEFAULT '[]',
+            status TEXT DEFAULT 'active',
+            consensus_reached INTEGER DEFAULT 0,
+            final_position TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            completed_at TEXT
+        )
+    """)
+
+    # Negotiation rounds
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS negotiation_rounds (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER REFERENCES negotiation_sessions(id) ON DELETE CASCADE,
+            round_number INTEGER NOT NULL,
+            agent_name TEXT NOT NULL,
+            response_type TEXT DEFAULT 'position',
+            position TEXT DEFAULT '',
+            evidence TEXT DEFAULT '',
+            confidence REAL DEFAULT 0.5,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    conn.commit()
+
+    # Migration: add origin and trigger_type columns to goals
+    goal_cols = [row["name"] for row in conn.execute("PRAGMA table_info(goals)").fetchall()]
+    if "origin" not in goal_cols:
+        conn.execute("ALTER TABLE goals ADD COLUMN origin TEXT DEFAULT 'user'")
+        conn.commit()
+    if "trigger_type" not in goal_cols:
+        conn.execute("ALTER TABLE goals ADD COLUMN trigger_type TEXT DEFAULT ''")
+        conn.commit()
+
+    # Migration: add auto_suggestions to user_profiles
+    profile_cols = [row["name"] for row in conn.execute("PRAGMA table_info(user_profiles)").fetchall()]
+    if "auto_suggestions" not in profile_cols:
+        conn.execute("ALTER TABLE user_profiles ADD COLUMN auto_suggestions INTEGER DEFAULT 1")
+        conn.commit()
+
     # Migrate orphaned messages (those without a conversation_id) into a "Previous Chat" conversation
     orphan = conn.execute("SELECT COUNT(*) as cnt FROM chat_history WHERE conversation_id IS NULL").fetchone()
     if orphan["cnt"] > 0:
@@ -1002,4 +1102,255 @@ def get_next_pending_step(goal_id: int) -> dict | None:
     ).fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+# --- RL Training Log ---
+
+def log_rl_training(user_id: int, samples_trained: int, accuracy: float | None = None) -> int:
+    """Log an RL training run."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    cursor = conn.execute(
+        "INSERT INTO rl_training_log (user_id, samples_trained, accuracy, trained_at) VALUES (?, ?, ?, ?)",
+        (user_id, samples_trained, accuracy, now),
+    )
+    conn.commit()
+    log_id = cursor.lastrowid
+    conn.close()
+    return log_id
+
+
+# --- Autonomous Tasks ---
+
+def create_autonomous_task(user_id: int, task_type: str, celery_task_id: str = "", config: str = "{}") -> int:
+    """Create a new autonomous task record."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    cursor = conn.execute(
+        "INSERT INTO autonomous_tasks (user_id, task_type, celery_task_id, status, config, created_at, updated_at) VALUES (?, ?, ?, 'pending', ?, ?, ?)",
+        (user_id, task_type, celery_task_id, config, now, now),
+    )
+    conn.commit()
+    task_id = cursor.lastrowid
+    conn.close()
+    return task_id
+
+
+def update_autonomous_task(task_id: int, **kwargs) -> None:
+    """Update an autonomous task record."""
+    conn = get_db()
+    kwargs["updated_at"] = datetime.now().isoformat()
+    fields = ", ".join(f"{k} = ?" for k in kwargs)
+    values = list(kwargs.values()) + [task_id]
+    conn.execute(f"UPDATE autonomous_tasks SET {fields} WHERE id = ?", values)
+    conn.commit()
+    conn.close()
+
+
+def get_autonomous_task(task_id: int) -> dict | None:
+    """Get a single autonomous task by ID."""
+    conn = get_db()
+    row = conn.execute("SELECT * FROM autonomous_tasks WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_user_tasks(user_id: int, status: str | None = None, limit: int = 50) -> list[dict]:
+    """Get autonomous tasks for a user."""
+    conn = get_db()
+    query = "SELECT * FROM autonomous_tasks WHERE user_id = ?"
+    params: list[Any] = [user_id]
+    if status:
+        query += " AND status = ?"
+        params.append(status)
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def create_task_result(task_id: int, result_type: str, data: str = "{}") -> int:
+    """Create a result entry for an autonomous task."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    cursor = conn.execute(
+        "INSERT INTO task_results (task_id, result_type, data, created_at) VALUES (?, ?, ?, ?)",
+        (task_id, result_type, data, now),
+    )
+    conn.commit()
+    result_id = cursor.lastrowid
+    conn.close()
+    return result_id
+
+
+def get_task_results(task_id: int) -> list[dict]:
+    """Get all results for an autonomous task."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM task_results WHERE task_id = ? ORDER BY created_at ASC",
+        (task_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+# --- Goal Suggestions ---
+
+def create_goal_with_origin(user_id: int, title: str, description: str = "", origin: str = "user", trigger_type: str = "") -> int:
+    """Create a goal with origin tracking (user or agent_suggested)."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    status = "suggested" if origin == "agent_suggested" else "active"
+    cursor = conn.execute(
+        "INSERT INTO goals (user_id, title, description, status, origin, trigger_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (user_id, title, description, status, origin, trigger_type, now, now),
+    )
+    conn.commit()
+    goal_id = cursor.lastrowid
+    conn.close()
+    return goal_id
+
+
+def get_suggested_goals(user_id: int) -> list[dict]:
+    """Get agent-suggested goals that haven't been approved/dismissed."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM goals WHERE user_id = ? AND origin = 'agent_suggested' AND status = 'suggested' ORDER BY created_at DESC",
+        (user_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def approve_goal(goal_id: int, user_id: int) -> bool:
+    """Approve a suggested goal — changes status to active."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    cursor = conn.execute(
+        "UPDATE goals SET status = 'active', updated_at = ? WHERE id = ? AND user_id = ? AND status = 'suggested'",
+        (now, goal_id, user_id),
+    )
+    conn.commit()
+    updated = cursor.rowcount > 0
+    conn.close()
+    return updated
+
+
+def dismiss_goal(goal_id: int, user_id: int) -> bool:
+    """Dismiss a suggested goal."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    cursor = conn.execute(
+        "UPDATE goals SET status = 'dismissed', updated_at = ? WHERE id = ? AND user_id = ? AND status = 'suggested'",
+        (now, goal_id, user_id),
+    )
+    conn.commit()
+    updated = cursor.rowcount > 0
+    conn.close()
+    return updated
+
+
+def log_goal_suggestion(user_id: int, trigger_type: str, cooldown_key: str, confidence: float, goal_id: int | None = None) -> int:
+    """Log a goal suggestion for anti-spam tracking."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    cursor = conn.execute(
+        "INSERT INTO goal_suggestion_log (user_id, trigger_type, cooldown_key, confidence, goal_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (user_id, trigger_type, cooldown_key, confidence, goal_id, now),
+    )
+    conn.commit()
+    log_id = cursor.lastrowid
+    conn.close()
+    return log_id
+
+
+def get_recent_suggestions(user_id: int, hours: int = 24) -> list[dict]:
+    """Get suggestions created in the last N hours for anti-spam."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM goal_suggestion_log WHERE user_id = ? AND created_at > datetime('now', ? || ' hours') ORDER BY created_at DESC",
+        (user_id, f"-{hours}"),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_suggestion_by_cooldown_key(user_id: int, cooldown_key: str, days: int = 7) -> dict | None:
+    """Check if a suggestion with this cooldown key was made recently."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM goal_suggestion_log WHERE user_id = ? AND cooldown_key = ? AND created_at > datetime('now', ? || ' days') ORDER BY created_at DESC LIMIT 1",
+        (user_id, cooldown_key, f"-{days}"),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+# --- Negotiation ---
+
+def create_negotiation_session(conversation_id: int | None, topic: str, agents: list[str]) -> int:
+    """Create a negotiation session."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    cursor = conn.execute(
+        "INSERT INTO negotiation_sessions (conversation_id, topic, agents, status, created_at) VALUES (?, ?, ?, 'active', ?)",
+        (conversation_id, topic, json.dumps(agents), now),
+    )
+    conn.commit()
+    session_id = cursor.lastrowid
+    conn.close()
+    return session_id
+
+
+def add_negotiation_round(session_id: int, round_number: int, agent_name: str, response_type: str, position: str, evidence: str = "", confidence: float = 0.5) -> int:
+    """Add a round to a negotiation session."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    cursor = conn.execute(
+        "INSERT INTO negotiation_rounds (session_id, round_number, agent_name, response_type, position, evidence, confidence, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (session_id, round_number, agent_name, response_type, position, evidence, confidence, now),
+    )
+    conn.commit()
+    round_id = cursor.lastrowid
+    conn.close()
+    return round_id
+
+
+def complete_negotiation(session_id: int, consensus_reached: bool, final_position: str) -> None:
+    """Complete a negotiation session."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    conn.execute(
+        "UPDATE negotiation_sessions SET status = 'completed', consensus_reached = ?, final_position = ?, completed_at = ? WHERE id = ?",
+        (1 if consensus_reached else 0, final_position, now, session_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_negotiation_rounds(session_id: int) -> list[dict]:
+    """Get all rounds for a negotiation session."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM negotiation_rounds WHERE session_id = ? ORDER BY round_number ASC, id ASC",
+        (session_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+# --- User profile auto_suggestions preference ---
+
+def get_auto_suggestions_enabled(user_id: int) -> bool:
+    """Check if auto-suggestions are enabled for a user."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT auto_suggestions FROM user_profiles WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return True  # Default on
+    return bool(row["auto_suggestions"])
 

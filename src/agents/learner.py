@@ -64,6 +64,15 @@ class AgentLearner:
         for mem in memories:
             lines.append(f"- [{mem['category']}] {mem['content']}")
 
+        # Include RL model predictions if available
+        try:
+            from ..rl.model import ToolSelector
+            selector = ToolSelector(user_id)
+            if selector.load():
+                lines.append("- [RL model] Personalized tool preferences are active")
+        except Exception:
+            pass
+
         if len(lines) <= 1:
             return ""
 

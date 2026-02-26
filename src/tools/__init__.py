@@ -13,6 +13,7 @@ from .salary_research import SalaryResearchTool
 from .email_drafter import EmailDrafterTool
 from .learning_path import LearningPathTool
 from .mock_interview import MockInterviewTool
+from .web_fetch import WebFetchTool
 
 __all__ = [
     "Tool",
@@ -31,4 +32,5 @@ __all__ = [
     "EmailDrafterTool",
     "LearningPathTool",
     "MockInterviewTool",
+    "WebFetchTool",
 ]

@@ -46,9 +46,9 @@ class GitHubAnalyzerTool(Tool):
     def description(self) -> str:
         return (
             "Analyze a GitHub profile to extract demonstrable skills. "
-            "Scans public repositories to identify programming languages, "
-            "frameworks, contribution activity, and project complexity. "
-            "Useful for strengthening a resume with verified technical skills."
+            "Use when user mentions their GitHub username, shares a GitHub URL, "
+            "or asks to analyze their open source contributions. "
+            "Scans public repositories for languages, frameworks, and activity."
         )
 
     @property
