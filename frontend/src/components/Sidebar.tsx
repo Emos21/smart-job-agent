@@ -101,7 +101,7 @@ export default function Sidebar({
       {/* Header */}
       <div className="p-3 border-b border-zinc-800 flex items-center justify-between gap-2">
         {open && (
-          <h1 className="text-lg font-semibold text-teal-400 tracking-wide pl-1">
+          <h1 className="text-lg font-semibold text-cyan-400 tracking-wide pl-1">
             KaziAI
           </h1>
         )}
@@ -140,7 +140,7 @@ export default function Sidebar({
                 open ? "px-3 py-2.5" : "px-0 py-2.5 justify-center"
               } ${
                 active
-                  ? "bg-zinc-800 text-teal-400"
+                  ? "bg-zinc-800 text-indigo-400"
                   : "text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200"
               }`}
               title={!open ? tab.label : undefined}
@@ -205,7 +205,7 @@ export default function Sidebar({
       <div className="p-3 border-t border-zinc-800">
         {open ? (
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-teal-600/20 flex items-center justify-center shrink-0 text-xs font-semibold text-teal-400">
+            <div className="w-8 h-8 rounded-full bg-indigo-600/20 flex items-center justify-center shrink-0 text-xs font-semibold text-indigo-400">
               {initials}
             </div>
             <div className="flex-1 min-w-0">
