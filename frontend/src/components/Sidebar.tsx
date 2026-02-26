@@ -3,11 +3,16 @@ import {
   Search,
   BarChart3,
   ClipboardList,
+  User as UserIcon,
+  LayoutDashboard,
+  BookOpen,
+  Target,
   Plus,
   PanelLeftClose,
   PanelLeftOpen,
   Trash2,
   LogOut,
+  Bell,
 } from "lucide-react";
 import { useState } from "react";
 import type { Conversation, User } from "../types";
@@ -24,13 +29,19 @@ interface SidebarProps {
   onDeleteConversation: (id: number) => void;
   user: User;
   onLogout: () => void;
+  unreadCount: number;
+  onNotificationsClick: () => void;
 }
 
 const tabs = [
   { id: "chat", label: "Chat", icon: MessageSquare },
+  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { id: "goals", label: "Goals", icon: Target },
   { id: "search", label: "Search Jobs", icon: Search },
   { id: "analyze", label: "Analyze", icon: BarChart3 },
   { id: "tracker", label: "Tracker", icon: ClipboardList },
+  { id: "learn", label: "Learn", icon: BookOpen },
+  { id: "profile", label: "Profile", icon: UserIcon },
 ];
 
 interface DateGroup {
@@ -81,6 +92,8 @@ export default function Sidebar({
   onDeleteConversation,
   user,
   onLogout,
+  unreadCount,
+  onNotificationsClick,
 }: SidebarProps) {
   const [hoveredId, setHoveredId] = useState<number | null>(null);
   const dateGroups = groupByDate(conversations);
@@ -151,6 +164,27 @@ export default function Sidebar({
           );
         })}
       </nav>
+
+      {/* Notification bell */}
+      <div className="px-2 pb-2">
+        <button
+          onClick={onNotificationsClick}
+          className={`w-full flex items-center gap-3 rounded-lg text-sm ${
+            open ? "px-3 py-2.5" : "px-0 py-2.5 justify-center"
+          } text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200 relative`}
+          title="Notifications"
+        >
+          <div className="relative">
+            <Bell size={18} />
+            {unreadCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1">
+                {unreadCount > 99 ? "99+" : unreadCount}
+              </span>
+            )}
+          </div>
+          {open && <span>Notifications</span>}
+        </button>
+      </div>
 
       {/* Conversation list (only when expanded) */}
       {open && (

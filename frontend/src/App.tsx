@@ -4,6 +4,11 @@ import ChatPanel from "./components/ChatPanel";
 import SearchPanel from "./components/SearchPanel";
 import AnalyzePanel from "./components/AnalyzePanel";
 import TrackerPanel from "./components/TrackerPanel";
+import ProfilePanel from "./components/ProfilePanel";
+import DashboardPanel from "./components/DashboardPanel";
+import LearningPanel from "./components/LearningPanel";
+import GoalsPanel from "./components/GoalsPanel";
+import NotificationPanel from "./components/NotificationPanel";
 import AuthPage from "./components/AuthPage";
 import type { Conversation, User } from "./types";
 import { apiFetch, getToken, clearToken, setOnUnauthorized } from "./lib/api";
@@ -16,6 +21,8 @@ export default function App() {
   const [chatKey, setChatKey] = useState(0);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<number | null>(null);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [showNotifications, setShowNotifications] = useState(false);
 
   // Handle 401 from any API call
   useEffect(() => {
@@ -57,6 +64,22 @@ export default function App() {
   useEffect(() => {
     fetchConversations();
   }, [fetchConversations]);
+
+  // Poll for unread notification count every 30s when logged in
+  useEffect(() => {
+    if (!user) return;
+
+    function fetchCount() {
+      apiFetch("/api/notifications/count")
+        .then((r) => r.json())
+        .then((data) => setUnreadCount(data.count))
+        .catch(() => {});
+    }
+
+    fetchCount();
+    const interval = setInterval(fetchCount, 30000);
+    return () => clearInterval(interval);
+  }, [user]);
 
   function handleNewChat() {
     setActiveConversationId(null);
@@ -107,19 +130,39 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-zinc-950">
-      <Sidebar
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-        open={sidebarOpen}
-        onToggle={() => setSidebarOpen((o) => !o)}
-        onNewChat={handleNewChat}
-        conversations={conversations}
-        activeConversationId={activeConversationId}
-        onSelectConversation={handleSelectConversation}
-        onDeleteConversation={handleDeleteConversation}
-        user={user}
-        onLogout={handleLogout}
-      />
+      <div className="relative">
+        <Sidebar
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          open={sidebarOpen}
+          onToggle={() => setSidebarOpen((o) => !o)}
+          onNewChat={handleNewChat}
+          conversations={conversations}
+          activeConversationId={activeConversationId}
+          onSelectConversation={handleSelectConversation}
+          onDeleteConversation={handleDeleteConversation}
+          user={user}
+          onLogout={handleLogout}
+          unreadCount={unreadCount}
+          onNotificationsClick={() => setShowNotifications((s) => !s)}
+        />
+        {showNotifications && (
+          <NotificationPanel
+            onClose={() => setShowNotifications(false)}
+            onNavigate={(tab) => {
+              setActiveTab(tab);
+              setShowNotifications(false);
+            }}
+            onCountChange={(delta) => {
+              if (delta === 0) {
+                setUnreadCount(0);
+              } else {
+                setUnreadCount((c) => Math.max(0, c + delta));
+              }
+            }}
+          />
+        )}
+      </div>
       <main className="flex-1 overflow-hidden">
         {activeTab === "chat" && (
           <ChatPanel
@@ -128,9 +171,13 @@ export default function App() {
             onConversationCreated={handleConversationCreated}
           />
         )}
+        {activeTab === "dashboard" && <DashboardPanel />}
+        {activeTab === "goals" && <GoalsPanel />}
         {activeTab === "search" && <SearchPanel />}
         {activeTab === "analyze" && <AnalyzePanel />}
         {activeTab === "tracker" && <TrackerPanel />}
+        {activeTab === "learn" && <LearningPanel />}
+        {activeTab === "profile" && <ProfilePanel />}
       </main>
     </div>
   );

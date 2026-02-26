@@ -2,13 +2,15 @@ import os
 import json
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from openai import OpenAI
+from fastapi.requests import Request
+from fastapi.responses import JSONResponse
 
 from . import database as db
 from .auth import hash_password, verify_password, create_token, get_current_user, verify_google_token
@@ -27,7 +29,11 @@ from .tools.salary_research import SalaryResearchTool
 from .tools.email_drafter import EmailDrafterTool
 from .tools.learning_path import LearningPathTool
 from .tools.mock_interview import MockInterviewTool
+from .tools.web_fetch import WebFetchTool
 from .agents.orchestrator import Orchestrator
+from .agents.router import AgentRouter, RoutingDecision
+from .agents.planner import GoalPlanner
+from .episodic_memory import EpisodicMemory
 
 load_dotenv()
 
@@ -35,7 +41,11 @@ load_dotenv()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
+    # Start background scheduler for proactive notifications
+    from .background import start_scheduler, stop_scheduler
+    start_scheduler()
     yield
+    stop_scheduler()
 
 
 app = FastAPI(
@@ -52,6 +62,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Catch unhandled exceptions and return a clean JSON error."""
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An internal error occurred. Please try again."},
+    )
 
 # Serve React frontend static files
 frontend_dist = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
@@ -112,10 +131,36 @@ class UpdateApplicationRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     conversation_id: int | None = None
+    file_content: str | None = None
+    file_name: str | None = None
 
 
 class RenameConversationRequest(BaseModel):
     title: str
+
+
+class ProfileRequest(BaseModel):
+    target_role: str = ""
+    experience_level: str = ""
+    skills: list[str] = []
+    bio: str = ""
+    linkedin_url: str = ""
+    github_username: str = ""
+    location: str = ""
+
+
+class SaveResumeRequest(BaseModel):
+    name: str
+    content: str
+    is_default: bool = False
+
+
+class CreateGoalRequest(BaseModel):
+    goal_text: str
+
+
+class FeedbackRequest(BaseModel):
+    rating: str  # "positive" or "negative"
 
 
 # --- Auth Routes ---
@@ -318,6 +363,143 @@ def update_application(app_id: int, req: UpdateApplicationRequest, user: dict = 
     return {"message": "Updated"}
 
 
+# --- Dashboard ---
+
+@app.get("/api/dashboard")
+def get_dashboard(user: dict = Depends(get_current_user)):
+    """Aggregated stats for the user's dashboard."""
+    jobs = db.get_jobs(user_id=user["id"])
+    applications = db.get_applications(user_id=user["id"])
+    conversations = db.get_conversations(user_id=user["id"])
+    resumes = db.get_resumes(user["id"])
+    profile = db.get_profile(user["id"])
+
+    status_counts = {}
+    for app in applications:
+        s = app.get("status", "saved")
+        status_counts[s] = status_counts.get(s, 0) + 1
+
+    recent_apps = applications[:5]
+
+    return {
+        "total_jobs_saved": len(jobs),
+        "total_applications": len(applications),
+        "total_conversations": len(conversations),
+        "total_resumes": len(resumes),
+        "has_profile": profile is not None,
+        "application_status": status_counts,
+        "recent_applications": [
+            {"title": a.get("title", ""), "company": a.get("company", ""), "status": a.get("status", ""), "updated_at": a.get("updated_at", "")}
+            for a in recent_apps
+        ],
+    }
+
+
+# --- Learning Path ---
+
+@app.post("/api/learning-path")
+def generate_learning_path(user: dict = Depends(get_current_user)):
+    """Generate a learning path based on the user's profile skill gaps."""
+    from .tools.learning_path import LearningPathTool
+
+    profile = db.get_profile(user["id"])
+    if not profile or not profile.get("skills"):
+        raise HTTPException(status_code=400, detail="Set your skills in your profile first")
+
+    target_role = profile.get("target_role", "Software Engineer")
+    current_skills = profile.get("skills", [])
+
+    # Suggest common skills for the target role that the user doesn't have
+    role_skills_map = {
+        "frontend": ["React", "TypeScript", "CSS", "Testing", "Performance", "Accessibility"],
+        "backend": ["Python", "SQL", "Docker", "REST APIs", "System Design", "Testing"],
+        "fullstack": ["React", "Node.js", "TypeScript", "SQL", "Docker", "System Design"],
+        "data": ["Python", "SQL", "Machine Learning", "Statistics", "Docker", "Cloud"],
+        "devops": ["Docker", "Kubernetes", "AWS", "CI/CD", "Terraform", "Linux"],
+    }
+
+    # Try to match role to suggestions
+    role_lower = target_role.lower()
+    suggested = []
+    for key, skills in role_skills_map.items():
+        if key in role_lower:
+            suggested = skills
+            break
+    if not suggested:
+        suggested = ["Python", "SQL", "Docker", "System Design", "TypeScript", "React"]
+
+    current_lower = [s.lower() for s in current_skills]
+    missing = [s for s in suggested if s.lower() not in current_lower]
+
+    if not missing:
+        return {"success": True, "message": "Your skills look solid for this role!", "learning_paths": [], "total_estimated_hours": 0, "total_estimated_weeks": 0}
+
+    tool = LearningPathTool()
+    return tool.execute(
+        missing_skills=missing[:6],
+        current_skills=current_skills,
+        target_role=target_role,
+    )
+
+
+# --- Profile & Resume endpoints ---
+
+@app.get("/api/profile")
+def get_profile(user: dict = Depends(get_current_user)):
+    """Get the current user's profile."""
+    profile = db.get_profile(user["id"])
+    if not profile:
+        return {"user_id": user["id"], "target_role": "", "experience_level": "", "skills": [], "bio": "", "linkedin_url": "", "github_username": "", "location": ""}
+    return profile
+
+
+@app.put("/api/profile")
+def update_profile(req: ProfileRequest, user: dict = Depends(get_current_user)):
+    """Create or update the current user's profile."""
+    profile = db.upsert_profile(
+        user["id"],
+        target_role=req.target_role,
+        experience_level=req.experience_level,
+        skills=req.skills,
+        bio=req.bio,
+        linkedin_url=req.linkedin_url,
+        github_username=req.github_username,
+        location=req.location,
+    )
+    return profile
+
+
+@app.get("/api/resumes")
+def list_resumes(user: dict = Depends(get_current_user)):
+    """List all saved resumes for the current user."""
+    return db.get_resumes(user["id"])
+
+
+@app.post("/api/resumes")
+def save_resume(req: SaveResumeRequest, user: dict = Depends(get_current_user)):
+    """Save a new resume."""
+    resume_id = db.save_resume(user["id"], req.name, req.content, req.is_default)
+    return {"id": resume_id, "message": "Resume saved"}
+
+
+@app.delete("/api/resumes/{resume_id}")
+def delete_resume(resume_id: int, user: dict = Depends(get_current_user)):
+    """Delete a saved resume."""
+    deleted = db.delete_resume(resume_id, user["id"])
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    return {"message": "Resume deleted"}
+
+
+@app.patch("/api/resumes/{resume_id}/default")
+def set_default_resume(resume_id: int, user: dict = Depends(get_current_user)):
+    """Set a resume as the default."""
+    updated = db.set_default_resume(resume_id, user["id"])
+    if not updated:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    return {"message": "Default resume updated"}
+
+
 # --- Conversation endpoints ---
 
 @app.get("/api/conversations")
@@ -363,6 +545,38 @@ def get_conversation_messages(conv_id: int, user: dict = Depends(get_current_use
     return db.get_chat_history(conv_id)
 
 
+# --- File extraction ---
+
+@app.post("/api/extract-text")
+async def extract_text(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    """Extract text from an uploaded file (.txt, .md, .pdf)."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+
+    ext = os.path.splitext(file.filename)[1].lower()
+    content = await file.read()
+
+    if ext == ".pdf":
+        try:
+            import fitz
+            doc = fitz.open(stream=content, filetype="pdf")
+            text = "\n\n".join(page.get_text() for page in doc)
+            doc.close()
+        except ImportError:
+            raise HTTPException(status_code=500, detail="PDF support not installed (pymupdf)")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to parse PDF: {str(e)}")
+    elif ext in (".txt", ".md", ".text"):
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            text = content.decode("latin-1")
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
+
+    return {"text": text, "filename": file.filename, "char_count": len(text)}
+
+
 # --- Chat (conversation-scoped, agentic with function calling) ---
 
 SYSTEM_PROMPT = """You are Kazi, a sharp and friendly career AI assistant. You talk like a smart friend who happens to have powerful job search and career tools at your fingertips.
@@ -389,7 +603,14 @@ WHEN TO USE TOOLS:
 - User wants resume feedback → use ATS scoring
 - User wants interview help → generate targeted questions
 - User asks about salary → research market rates
-- If the user is just chatting or asking general questions, just talk — don't force a tool call"""
+- User shares a URL → fetch and read it
+- If the user is just chatting or asking general questions, just talk — don't force a tool call
+
+DOCUMENT HANDLING:
+- When file content is attached between --- markers, analyze it thoroughly
+- If it's a resume/CV, give career-relevant feedback on structure, content, ATS readiness, and areas for improvement
+- If it's a job description, analyze requirements, qualifications, and company expectations
+- If it's another document type, summarize and help the user with whatever they need"""
 
 
 # Build a chat tool registry with all tools
@@ -408,10 +629,31 @@ def _build_chat_registry() -> ToolRegistry:
     registry.register(EmailDrafterTool())
     registry.register(LearningPathTool())
     registry.register(MockInterviewTool())
+    registry.register(ResumeAnalyzerTool())
+    registry.register(WebFetchTool())
     return registry
 
 CHAT_REGISTRY = _build_chat_registry()
-MAX_TOOL_ROUNDS = 3
+MAX_TOOL_ROUNDS = 6
+
+# Agent router for smart dispatch
+_agent_router = AgentRouter()
+
+# Active dispatch tracking for cancellation (Phase 6)
+_active_dispatches: dict[int, dict] = {}  # conversation_id -> {"cancel_requested": False}
+
+# Friendly agent names for status messages
+_AGENT_STATUS = {
+    "scout": "Scout Agent searching for jobs",
+    "match": "Match Agent analyzing compatibility",
+    "forge": "Forge Agent writing materials",
+    "coach": "Coach Agent preparing interview prep",
+}
+
+# Simple TTL cache for tool results (5-minute expiry)
+_tool_cache: dict[str, tuple[float, dict]] = {}
+_CACHE_TTL = 300  # seconds
+_CACHEABLE_TOOLS = {"search_jobs", "research_company", "analyze_github", "research_salary", "fetch_url"}
 
 
 def _get_llm_client():
@@ -434,14 +676,37 @@ def _truncate_title(text: str, max_len: int = 40) -> str:
 
 
 def _execute_tool_call(name: str, arguments: dict) -> dict:
-    """Execute a tool by name and return its result."""
+    """Execute a tool by name and return its result, with caching for eligible tools."""
+    import time
+
     tool = CHAT_REGISTRY.get(name)
     if tool is None:
         return {"success": False, "error": f"Unknown tool: {name}"}
+
+    # Check cache for cacheable tools
+    if name in _CACHEABLE_TOOLS:
+        cache_key = f"{name}:{json.dumps(arguments, sort_keys=True)}"
+        cached = _tool_cache.get(cache_key)
+        if cached:
+            ts, result = cached
+            if time.time() - ts < _CACHE_TTL:
+                return result
+
     try:
-        return tool.execute(**arguments)
+        result = tool.execute(**arguments)
     except Exception as e:
         return {"success": False, "error": f"Tool failed: {str(e)}"}
+
+    # Store in cache
+    if name in _CACHEABLE_TOOLS:
+        cache_key = f"{name}:{json.dumps(arguments, sort_keys=True)}"
+        _tool_cache[cache_key] = (time.time(), result)
+        # Evict old entries (keep cache bounded)
+        if len(_tool_cache) > 100:
+            oldest_key = min(_tool_cache, key=lambda k: _tool_cache[k][0])
+            del _tool_cache[oldest_key]
+
+    return result
 
 
 def _clean_response(text: str) -> str:
@@ -478,12 +743,24 @@ def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
 
     db.save_chat_message("user", req.message, conversation_id)
 
+    # Build system prompt with user context
+    profile = db.get_profile(user["id"])
+    default_resume = db.get_default_resume(user["id"])
+    system_content = SYSTEM_PROMPT + _build_user_context(user, profile, default_resume)
+
     # Build conversation messages from history
     history = db.get_chat_history(conversation_id, limit=20)
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": system_content}]
     for msg in history[:-1]:
         messages.append({"role": msg["role"], "content": msg["content"]})
-    messages.append({"role": "user", "content": req.message})
+
+    # Build the user message, injecting file content if attached
+    user_content = req.message
+    if req.file_content:
+        file_label = req.file_name or "attached file"
+        truncated = req.file_content[:6000]
+        user_content = f"{req.message}\n\n[Attached file: {file_label}]\n---\n{truncated}\n---"
+    messages.append({"role": "user", "content": user_content})
 
     client = _get_llm_client()
     if not client:
@@ -559,6 +836,582 @@ def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     response = _clean_response(response)
     db.save_chat_message("assistant", response, conversation_id)
     return {"response": response, "conversation_id": conversation_id}
+
+
+# Friendly tool names for status messages
+_TOOL_STATUS = {
+    "search_jobs": "Searching for jobs",
+    "parse_job_description": "Analyzing job description",
+    "analyze_resume": "Analyzing resume",
+    "match_skills": "Matching skills",
+    "score_ats": "Scoring ATS compatibility",
+    "prepare_interview": "Preparing interview questions",
+    "generate_cover_letter": "Writing cover letter",
+    "rewrite_resume": "Rewriting resume",
+    "research_company": "Researching company",
+    "analyze_github": "Analyzing GitHub profile",
+    "research_salary": "Researching salary data",
+    "draft_email": "Drafting email",
+    "generate_learning_path": "Creating learning path",
+    "mock_interview": "Running mock interview",
+    "fetch_url": "Reading webpage",
+}
+
+
+def _build_user_context(user: dict, profile: dict | None, default_resume: dict | None, memories_text: str = "") -> str:
+    """Build user context string for system prompt injection."""
+    parts = []
+    if user.get("name"):
+        parts.append(f"Name: {user['name']}")
+    if profile:
+        if profile.get("target_role"):
+            parts.append(f"Targeting: {profile['target_role']} roles")
+        if profile.get("experience_level"):
+            parts.append(f"Experience: {profile['experience_level']}")
+        if profile.get("skills"):
+            skills_str = ", ".join(profile["skills"][:15])
+            parts.append(f"Skills: {skills_str}")
+        if profile.get("location"):
+            parts.append(f"Location: {profile['location']}")
+    if default_resume:
+        resume_preview = default_resume["content"][:2000]
+        parts.append(f"\nResume on file ({default_resume['name']}):\n{resume_preview}")
+    result = ""
+    if parts:
+        result = "\n\nUSER CONTEXT:\n" + "\n".join(parts)
+    if memories_text:
+        result += f"\n\n{memories_text}"
+    return result
+
+
+def _generate_direct_llm(client, messages, tool_specs):
+    """Generator for direct LLM path with tool calling (general chat)."""
+    full_response = ""
+
+    for _round in range(MAX_TOOL_ROUNDS + 1):
+        is_last_round = _round >= MAX_TOOL_ROUNDS
+
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=messages,
+            tools=tool_specs if not is_last_round else None,
+            tool_choice="auto" if not is_last_round else None,
+            max_tokens=1024,
+            temperature=0.6,
+            stream=False,
+        )
+
+        message = completion.choices[0].message
+
+        if message.tool_calls:
+            messages.append({
+                "role": "assistant",
+                "content": message.content,
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                    for tc in message.tool_calls
+                ],
+            })
+
+            for tc in message.tool_calls:
+                func_name = tc.function.name
+                status = _TOOL_STATUS.get(func_name, f"Using {func_name}")
+                yield ("tool_status", {"tool": func_name, "status": status})
+
+                try:
+                    func_args = json.loads(tc.function.arguments)
+                except json.JSONDecodeError:
+                    func_args = {}
+
+                result = _execute_tool_call(func_name, func_args)
+                result_str = json.dumps(result, indent=2)
+                if len(result_str) > 4000:
+                    result_str = result_str[:4000] + "\n... (truncated)"
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": result_str,
+                })
+            continue
+
+        # Final response — stream it
+        stream = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=messages,
+            max_tokens=1024,
+            temperature=0.6,
+            stream=True,
+        )
+        full_response = ""
+        for chunk in stream:
+            delta = chunk.choices[0].delta
+            if delta.content:
+                full_response += delta.content
+                yield ("content", {"text": delta.content})
+        break
+
+    yield ("_final", full_response)
+
+
+def _generate_agent_dispatch(client, messages, routing, user_message, resume_text, profile, user_id=None, conversation_id=None, cancel_check=None):
+    """Generator for agent-dispatched path. Uses orchestrator with message bus, evaluator, and structured communication."""
+    orchestrator = Orchestrator(provider="groq")
+
+    # Collect events from orchestrator callbacks
+    events = []
+
+    def on_status(agent_name, status):
+        friendly = _AGENT_STATUS.get(agent_name, f"Running {agent_name} agent")
+        msg = friendly if status == "running" else f"{agent_name.capitalize()} {'done' if status == 'complete' else 'failed'}"
+        events.append(("agent_status", {"agent": agent_name, "status": status, "message": msg}))
+
+    def on_thought(agent_name, thought, tool_name):
+        events.append(("agent_reasoning", {"agent": agent_name, "thought": thought[:300], "tool": tool_name}))
+
+    def on_evaluator(decision):
+        events.append(("evaluator", decision))
+
+    # Dispatch with structured communication
+    results = orchestrator.dispatch(
+        routing=routing,
+        user_message=user_message,
+        resume_text=resume_text,
+        profile=profile,
+        on_agent_status=on_status,
+        user_id=user_id,
+        conversation_id=conversation_id,
+        cancel_check=cancel_check,
+        on_agent_thought=on_thought,
+        on_evaluator=on_evaluator,
+    )
+
+    # Yield all collected events
+    for evt in events:
+        yield evt
+
+    # Emit trace IDs for feedback UI
+    trace_ids = [r.trace_id for r in results if r.trace_id is not None]
+    if trace_ids:
+        yield ("trace_ids", {"ids": trace_ids})
+
+    # Check if cancelled
+    if cancel_check and cancel_check():
+        partial = "\n".join(r.output[:500] for r in results if r.success)
+        yield ("content", {"text": f"Stopped early. Here's what I found so far:\n\n{partial}"})
+        yield ("_final", partial)
+        return
+
+    # Build synthesis prompt with agent outputs
+    agent_context = ""
+    for r in results:
+        if r.success:
+            output_preview = r.output[:3000]
+            agent_context += f"\n\n[{r.agent_name.upper()} AGENT RESULTS]\n{output_preview}\n"
+
+    if agent_context:
+        messages.append({
+            "role": "system",
+            "content": (
+                "AGENT ANALYSIS RESULTS (synthesize these into your response — "
+                "do NOT mention agent names to the user):"
+                f"{agent_context}"
+            ),
+        })
+
+    # Stream the final synthesized response
+    stream = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=messages,
+        max_tokens=2048,
+        temperature=0.6,
+        stream=True,
+    )
+    full_response = ""
+    for chunk in stream:
+        delta = chunk.choices[0].delta
+        if delta.content:
+            full_response += delta.content
+            yield ("content", {"text": delta.content})
+
+    yield ("_final", full_response)
+
+
+@app.post("/api/chat/stream")
+def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
+    """Streaming chat endpoint using Server-Sent Events.
+
+    Flow:
+    1. Classify intent via AgentRouter
+    2. If general_chat: direct LLM path with tool calling
+    3. If specific agents: dispatch via orchestrator, then synthesize
+    """
+    conversation_id = req.conversation_id
+
+    if conversation_id is None:
+        title = _truncate_title(req.message)
+        conversation_id = db.create_conversation(title, user_id=user["id"])
+    else:
+        conv = db.get_conversation_for_user(conversation_id, user["id"])
+        if not conv:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
+    db.save_chat_message("user", req.message, conversation_id)
+
+    # Gather user context
+    profile = db.get_profile(user["id"])
+    default_resume = db.get_default_resume(user["id"])
+
+    # Retrieve episodic memories
+    memory = EpisodicMemory(user["id"])
+    memories_text = memory.recall_as_context(limit=10)
+
+    # Build system prompt
+    system_content = SYSTEM_PROMPT + _build_user_context(user, profile, default_resume, memories_text)
+
+    # Build conversation messages
+    history = db.get_chat_history(conversation_id, limit=20)
+    messages = [{"role": "system", "content": system_content}]
+    for msg in history[:-1]:
+        messages.append({"role": msg["role"], "content": msg["content"]})
+
+    user_content = req.message
+    if req.file_content:
+        file_label = req.file_name or "attached file"
+        truncated = req.file_content[:6000]
+        user_content = f"{req.message}\n\n[Attached file: {file_label}]\n---\n{truncated}\n---"
+    messages.append({"role": "user", "content": user_content})
+
+    client = _get_llm_client()
+
+    # Route the message
+    routing = _agent_router.route(
+        req.message,
+        has_resume=default_resume is not None,
+        has_profile=profile is not None,
+    )
+
+    resume_text = default_resume["content"] if default_resume else ""
+
+    def generate():
+        nonlocal conversation_id
+        if not client:
+            yield f"data: {json.dumps({'type': 'content', 'text': 'AI backend not configured. Please set GROQ_API_KEY.'})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'conversation_id': conversation_id})}\n\n"
+            return
+
+        # Register for cancellation
+        _active_dispatches[conversation_id] = {"cancel_requested": False}
+
+        def dispatch_cancel_check():
+            state = _active_dispatches.get(conversation_id, {})
+            return state.get("cancel_requested", False)
+
+        yield f"data: {json.dumps({'type': 'conversation_id', 'conversation_id': conversation_id})}\n\n"
+
+        # Emit routing decision to frontend
+        yield f"data: {json.dumps({'type': 'routing', 'intent': routing.intent, 'agents': routing.agents})}\n\n"
+
+        full_response = ""
+
+        try:
+            gen = None
+            multi_step_prefix_events = []
+
+            if routing.intent == "general_chat" or not routing.agents:
+                # Direct LLM path with tool calling
+                gen = _generate_direct_llm(client, messages, CHAT_REGISTRY.to_openai_specs())
+            elif routing.intent == "multi_step":
+                # Create a goal plan and execute the first step
+                try:
+                    plan = _goal_planner.create_plan(req.message, _build_user_context(user, profile, default_resume, ""))
+                    goal_id = _goal_planner.save_plan(user["id"], plan)
+                    plan_title = plan["title"]
+                    plan_step_count = len(plan["steps"])
+                    status_data = json.dumps({
+                        "type": "agent_status",
+                        "agent": "planner",
+                        "status": "complete",
+                        "message": f"Created plan: {plan_title} ({plan_step_count} steps)",
+                    })
+                    multi_step_prefix_events.append(f"data: {status_data}\n\n")
+
+                    first_step = plan["steps"][0] if plan["steps"] else None
+                    if first_step:
+                        first_routing = RoutingDecision(
+                            intent="goal_step",
+                            agents=[first_step["agent_name"]],
+                            extracted_context=routing.extracted_context,
+                            reasoning="Executing first step of goal plan",
+                        )
+                        # Add plan context to messages for synthesis
+                        plan_text = f"\n\nI created a goal plan: '{plan['title']}' with {len(plan['steps'])} steps:\n"
+                        for i, s in enumerate(plan["steps"], 1):
+                            plan_text += f"{i}. {s['title']} ({s['agent_name']} agent)\n"
+                        plan_text += f"\nThe user can say 'continue my plan' or check the Goals tab to resume."
+                        messages.append({"role": "system", "content": plan_text})
+
+                        gen = _generate_agent_dispatch(
+                            client, messages, first_routing, req.message, resume_text, profile,
+                            user_id=user["id"], conversation_id=conversation_id,
+                            cancel_check=dispatch_cancel_check,
+                        )
+                    else:
+                        gen = _generate_direct_llm(client, messages, CHAT_REGISTRY.to_openai_specs())
+                except Exception:
+                    gen = _generate_agent_dispatch(
+                        client, messages, routing, req.message, resume_text, profile,
+                        user_id=user["id"], conversation_id=conversation_id,
+                        cancel_check=dispatch_cancel_check,
+                    )
+            else:
+                # Agent dispatch path
+                gen = _generate_agent_dispatch(
+                    client, messages, routing, req.message, resume_text, profile,
+                    user_id=user["id"], conversation_id=conversation_id,
+                    cancel_check=dispatch_cancel_check,
+                )
+
+            # Emit any prefix events from multi-step planning
+            for evt in multi_step_prefix_events:
+                yield evt
+
+            for event_type, event_data in gen:
+                if event_type == "_final":
+                    full_response = event_data
+                elif event_type == "tool_status":
+                    yield f"data: {json.dumps({'type': 'tool_status', **event_data})}\n\n"
+                elif event_type == "agent_status":
+                    yield f"data: {json.dumps({'type': 'agent_status', **event_data})}\n\n"
+                elif event_type == "evaluator":
+                    yield f"data: {json.dumps({'type': 'evaluator', **event_data})}\n\n"
+                elif event_type == "agent_reasoning":
+                    yield f"data: {json.dumps({'type': 'agent_reasoning', **event_data})}\n\n"
+                elif event_type == "trace_ids":
+                    yield f"data: {json.dumps({'type': 'trace_ids', **event_data})}\n\n"
+                elif event_type == "content":
+                    yield f"data: {json.dumps({'type': 'content', **event_data})}\n\n"
+
+        except Exception as e:
+            full_response = f"Something went wrong — {str(e)[:200]}. Mind trying again?"
+            yield f"data: {json.dumps({'type': 'content', 'text': full_response})}\n\n"
+
+        full_response = _clean_response(full_response)
+        db.save_chat_message("assistant", full_response, conversation_id)
+        yield f"data: {json.dumps({'type': 'done', 'conversation_id': conversation_id})}\n\n"
+
+        # Clean up active dispatch tracking
+        _active_dispatches.pop(conversation_id, None)
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.post("/api/chat/{conv_id}/cancel")
+def cancel_chat(conv_id: int, user: dict = Depends(get_current_user)):
+    """Cancel an active agent dispatch for a conversation."""
+    conv = db.get_conversation_for_user(conv_id, user["id"])
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    state = _active_dispatches.get(conv_id)
+    if state:
+        state["cancel_requested"] = True
+        return {"message": "Cancel requested"}
+    return {"message": "No active dispatch found"}
+
+
+# --- Trace Feedback ---
+
+@app.post("/api/traces/{trace_id}/feedback")
+def set_trace_feedback(trace_id: int, req: FeedbackRequest, user: dict = Depends(get_current_user)):
+    """Set feedback (positive/negative) on an agent trace."""
+    if req.rating not in ("positive", "negative"):
+        raise HTTPException(status_code=400, detail="Rating must be 'positive' or 'negative'")
+    updated = db.set_trace_feedback(trace_id, user["id"], req.rating)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Trace not found")
+    return {"message": "Feedback recorded"}
+
+
+# --- Notifications ---
+
+@app.get("/api/notifications")
+def list_notifications(unread_only: bool = False, user: dict = Depends(get_current_user)):
+    """Get notifications for the current user."""
+    return db.get_notifications(user["id"], unread_only=unread_only)
+
+
+@app.get("/api/notifications/count")
+def get_notification_count(user: dict = Depends(get_current_user)):
+    """Get unread notification count."""
+    return {"count": db.get_unread_notification_count(user["id"])}
+
+
+@app.patch("/api/notifications/{nid}/read")
+def mark_notification_read(nid: int, user: dict = Depends(get_current_user)):
+    """Mark a notification as read."""
+    updated = db.mark_notification_read(nid, user["id"])
+    if not updated:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return {"message": "Marked as read"}
+
+
+@app.post("/api/notifications/read-all")
+def mark_all_read(user: dict = Depends(get_current_user)):
+    """Mark all notifications as read."""
+    count = db.mark_all_notifications_read(user["id"])
+    return {"message": f"Marked {count} notifications as read"}
+
+
+# --- Goals ---
+
+_goal_planner = GoalPlanner()
+
+
+@app.post("/api/goals")
+def create_goal(req: CreateGoalRequest, user: dict = Depends(get_current_user)):
+    """Create a new goal with an AI-generated plan."""
+    profile = db.get_profile(user["id"])
+    default_resume = db.get_default_resume(user["id"])
+
+    user_context = ""
+    if profile:
+        parts = []
+        if profile.get("target_role"):
+            parts.append(f"Target role: {profile['target_role']}")
+        if profile.get("skills"):
+            parts.append(f"Skills: {', '.join(profile['skills'][:10])}")
+        if profile.get("experience_level"):
+            parts.append(f"Experience: {profile['experience_level']}")
+        user_context = "User context:\n" + "\n".join(parts)
+
+    plan = _goal_planner.create_plan(req.goal_text, user_context)
+    goal_id = _goal_planner.save_plan(user["id"], plan)
+
+    return {
+        "goal_id": goal_id,
+        "title": plan["title"],
+        "steps": plan["steps"],
+    }
+
+
+@app.get("/api/goals")
+def list_goals(status: str | None = None, user: dict = Depends(get_current_user)):
+    """List user's goals with progress."""
+    goals = db.get_goals(user["id"], status=status)
+    result = []
+    for g in goals:
+        steps = db.get_goal_steps(g["id"])
+        completed = sum(1 for s in steps if s["status"] == "completed")
+        result.append({
+            **g,
+            "total_steps": len(steps),
+            "completed_steps": completed,
+            "progress": completed / len(steps) if steps else 0,
+        })
+    return result
+
+
+@app.get("/api/goals/{goal_id}")
+def get_goal_detail(goal_id: int, user: dict = Depends(get_current_user)):
+    """Get goal detail with steps."""
+    status = _goal_planner.get_plan_status(goal_id, user["id"])
+    if not status:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    return status
+
+
+@app.post("/api/goals/{goal_id}/execute-next")
+def execute_next_goal_step(goal_id: int, user: dict = Depends(get_current_user)):
+    """Execute the next pending step in a goal."""
+    goal = db.get_goal(goal_id, user["id"])
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+
+    profile = db.get_profile(user["id"])
+    default_resume = db.get_default_resume(user["id"])
+    resume_text = default_resume["content"] if default_resume else ""
+
+    result = _goal_planner.execute_next_step(
+        goal_id=goal_id,
+        user_id=user["id"],
+        resume_text=resume_text,
+        profile=profile,
+    )
+
+    if not result:
+        return {"message": "No pending steps remaining", "goal_status": "completed"}
+
+    return result
+
+
+# Active goal auto-executions (for cancellation)
+_active_goal_executions: dict[int, dict] = {}  # goal_id -> {"cancel_requested": False}
+
+
+@app.post("/api/goals/{goal_id}/auto-execute")
+def auto_execute_goal(goal_id: int, user: dict = Depends(get_current_user)):
+    """Auto-execute all remaining steps in a goal, streaming progress via SSE."""
+    goal = db.get_goal(goal_id, user["id"])
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+
+    profile = db.get_profile(user["id"])
+    default_resume = db.get_default_resume(user["id"])
+    resume_text = default_resume["content"] if default_resume else ""
+
+    # Register for cancellation
+    _active_goal_executions[goal_id] = {"cancel_requested": False}
+
+    def cancel_check():
+        state = _active_goal_executions.get(goal_id, {})
+        return state.get("cancel_requested", False)
+
+    def generate():
+        try:
+            for event_type, event_data in _goal_planner.auto_execute(
+                goal_id=goal_id,
+                user_id=user["id"],
+                resume_text=resume_text,
+                profile=profile,
+                cancel_check=cancel_check,
+            ):
+                yield f"data: {json.dumps({'type': event_type, **event_data})}\n\n"
+        finally:
+            _active_goal_executions.pop(goal_id, None)
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.post("/api/goals/{goal_id}/cancel")
+def cancel_goal_execution(goal_id: int, user: dict = Depends(get_current_user)):
+    """Cancel an auto-executing goal."""
+    goal = db.get_goal(goal_id, user["id"])
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+
+    state = _active_goal_executions.get(goal_id)
+    if state:
+        state["cancel_requested"] = True
+        return {"message": "Cancel requested"}
+    return {"message": "No active execution found"}
+
+
+# --- Suggestions ---
+
+@app.get("/api/suggestions")
+def get_suggestions(user: dict = Depends(get_current_user)):
+    """Get proactive suggestions for the user."""
+    from .suggestions import SuggestionEngine
+    engine = SuggestionEngine(user["id"])
+    return engine.generate()
 
 
 # Serve React frontend for all non-API routes

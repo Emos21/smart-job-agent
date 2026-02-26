@@ -79,6 +79,95 @@ def init_db() -> None:
             content TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS user_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER UNIQUE REFERENCES users(id),
+            target_role TEXT DEFAULT '',
+            experience_level TEXT DEFAULT '',
+            skills TEXT DEFAULT '[]',
+            bio TEXT DEFAULT '',
+            linkedin_url TEXT DEFAULT '',
+            github_username TEXT DEFAULT '',
+            location TEXT DEFAULT '',
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS user_resumes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER REFERENCES users(id),
+            name TEXT NOT NULL,
+            content TEXT NOT NULL,
+            is_default INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        -- Execution audit trail for agent runs
+        CREATE TABLE IF NOT EXISTS agent_traces (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER REFERENCES users(id),
+            conversation_id INTEGER REFERENCES conversations(id),
+            agent_name TEXT NOT NULL,
+            intent TEXT DEFAULT '',
+            task TEXT DEFAULT '',
+            status TEXT DEFAULT 'running',
+            output TEXT DEFAULT '',
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            total_steps INTEGER DEFAULT 0,
+            total_tool_calls INTEGER DEFAULT 0
+        );
+
+        -- Individual steps within a trace
+        CREATE TABLE IF NOT EXISTS agent_steps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trace_id INTEGER REFERENCES agent_traces(id) ON DELETE CASCADE,
+            step_number INTEGER NOT NULL,
+            thought TEXT DEFAULT '',
+            tool_name TEXT DEFAULT '',
+            tool_args TEXT DEFAULT '',
+            tool_result TEXT DEFAULT '',
+            observation TEXT DEFAULT '',
+            success INTEGER DEFAULT 1,
+            created_at TEXT NOT NULL
+        );
+
+        -- Episodic memory: facts the AI learned about this user
+        CREATE TABLE IF NOT EXISTS user_memories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER REFERENCES users(id),
+            category TEXT NOT NULL DEFAULT 'fact',
+            content TEXT NOT NULL,
+            source_conversation_id INTEGER,
+            relevance_score REAL DEFAULT 1.0,
+            created_at TEXT NOT NULL,
+            last_accessed TEXT
+        );
+
+        -- Goals and goal steps for multi-step planning
+        CREATE TABLE IF NOT EXISTS goals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER REFERENCES users(id),
+            title TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            status TEXT DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS goal_steps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            goal_id INTEGER REFERENCES goals(id) ON DELETE CASCADE,
+            step_number INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            agent_name TEXT DEFAULT '',
+            status TEXT DEFAULT 'pending',
+            output TEXT DEFAULT '',
+            trace_id INTEGER,
+            created_at TEXT NOT NULL,
+            completed_at TEXT
+        );
     """)
     conn.commit()
 
@@ -111,6 +200,33 @@ def init_db() -> None:
     if "user_id" not in app_cols:
         conn.execute("ALTER TABLE applications ADD COLUMN user_id INTEGER REFERENCES users(id)")
         conn.commit()
+
+    # Migration: add embedding column to user_memories if it doesn't exist
+    mem_cols = [row["name"] for row in conn.execute("PRAGMA table_info(user_memories)").fetchall()]
+    if "embedding" not in mem_cols:
+        conn.execute("ALTER TABLE user_memories ADD COLUMN embedding TEXT")
+        conn.commit()
+
+    # Migration: add feedback column to agent_traces if it doesn't exist
+    trace_cols = [row["name"] for row in conn.execute("PRAGMA table_info(agent_traces)").fetchall()]
+    if "feedback" not in trace_cols:
+        conn.execute("ALTER TABLE agent_traces ADD COLUMN feedback TEXT")
+        conn.commit()
+
+    # Create notifications table if it doesn't exist
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER REFERENCES users(id),
+            type TEXT NOT NULL,
+            title TEXT NOT NULL,
+            message TEXT NOT NULL,
+            data TEXT DEFAULT '{}',
+            read INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.commit()
 
     # Migrate orphaned messages (those without a conversation_id) into a "Previous Chat" conversation
     orphan = conn.execute("SELECT COUNT(*) as cnt FROM chat_history WHERE conversation_id IS NULL").fetchone()
@@ -397,4 +513,493 @@ def save_analysis(application_id: int, agent_name: str, output: str) -> int:
     analysis_id = cursor.lastrowid
     conn.close()
     return analysis_id
+
+
+# --- User Profile CRUD ---
+
+def get_profile(user_id: int) -> dict | None:
+    """Get the profile for a user."""
+    conn = get_db()
+    row = conn.execute("SELECT * FROM user_profiles WHERE user_id = ?", (user_id,)).fetchone()
+    conn.close()
+    if not row:
+        return None
+    result = dict(row)
+    result["skills"] = json.loads(result.get("skills") or "[]")
+    return result
+
+
+def upsert_profile(user_id: int, **kwargs) -> dict:
+    """Create or update a user profile. Returns the updated profile."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    existing = conn.execute("SELECT id FROM user_profiles WHERE user_id = ?", (user_id,)).fetchone()
+
+    if "skills" in kwargs and isinstance(kwargs["skills"], list):
+        kwargs["skills"] = json.dumps(kwargs["skills"])
+
+    kwargs["updated_at"] = now
+
+    if existing:
+        fields = ", ".join(f"{k} = ?" for k in kwargs)
+        values = list(kwargs.values()) + [user_id]
+        conn.execute(f"UPDATE user_profiles SET {fields} WHERE user_id = ?", values)
+    else:
+        kwargs["user_id"] = user_id
+        cols = ", ".join(kwargs.keys())
+        placeholders = ", ".join("?" for _ in kwargs)
+        conn.execute(f"INSERT INTO user_profiles ({cols}) VALUES ({placeholders})", list(kwargs.values()))
+
+    conn.commit()
+    conn.close()
+    return get_profile(user_id)
+
+
+# --- User Resume CRUD ---
+
+def save_resume(user_id: int, name: str, content: str, is_default: bool = False) -> int:
+    """Save a resume for a user. If is_default, unset other defaults first."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+
+    if is_default:
+        conn.execute("UPDATE user_resumes SET is_default = 0 WHERE user_id = ?", (user_id,))
+
+    cursor = conn.execute(
+        "INSERT INTO user_resumes (user_id, name, content, is_default, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (user_id, name, content, 1 if is_default else 0, now, now),
+    )
+    conn.commit()
+    resume_id = cursor.lastrowid
+    conn.close()
+    return resume_id
+
+
+def get_resumes(user_id: int) -> list[dict]:
+    """Get all resumes for a user."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, user_id, name, is_default, created_at, updated_at, LENGTH(content) as char_count FROM user_resumes WHERE user_id = ? ORDER BY updated_at DESC",
+        (user_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_resume(resume_id: int, user_id: int) -> dict | None:
+    """Get a specific resume by ID, verifying ownership."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM user_resumes WHERE id = ? AND user_id = ?",
+        (resume_id, user_id),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_default_resume(user_id: int) -> dict | None:
+    """Get the user's default resume."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM user_resumes WHERE user_id = ? AND is_default = 1",
+        (user_id,),
+    ).fetchone()
+    if not row:
+        # Fall back to most recent resume
+        row = conn.execute(
+            "SELECT * FROM user_resumes WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def delete_resume(resume_id: int, user_id: int) -> bool:
+    """Delete a resume. Returns True if deleted."""
+    conn = get_db()
+    cursor = conn.execute(
+        "DELETE FROM user_resumes WHERE id = ? AND user_id = ?",
+        (resume_id, user_id),
+    )
+    conn.commit()
+    deleted = cursor.rowcount > 0
+    conn.close()
+    return deleted
+
+
+def set_default_resume(resume_id: int, user_id: int) -> bool:
+    """Set a resume as the default for a user."""
+    conn = get_db()
+    conn.execute("UPDATE user_resumes SET is_default = 0 WHERE user_id = ?", (user_id,))
+    cursor = conn.execute(
+        "UPDATE user_resumes SET is_default = 1 WHERE id = ? AND user_id = ?",
+        (resume_id, user_id),
+    )
+    conn.commit()
+    updated = cursor.rowcount > 0
+    conn.close()
+    return updated
+
+
+# --- Agent Traces ---
+
+def create_trace(user_id: int, conversation_id: int | None, agent_name: str, intent: str = "", task: str = "") -> int:
+    """Create a new agent execution trace and return its ID."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    cursor = conn.execute(
+        "INSERT INTO agent_traces (user_id, conversation_id, agent_name, intent, task, status, started_at) VALUES (?, ?, ?, ?, ?, 'running', ?)",
+        (user_id, conversation_id, agent_name, intent, task[:2000], now),
+    )
+    conn.commit()
+    trace_id = cursor.lastrowid
+    conn.close()
+    return trace_id
+
+
+def add_trace_step(
+    trace_id: int,
+    step_number: int,
+    thought: str = "",
+    tool_name: str = "",
+    tool_args: str = "",
+    tool_result: str = "",
+    observation: str = "",
+    success: bool = True,
+) -> int:
+    """Add a step to an agent trace."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    cursor = conn.execute(
+        "INSERT INTO agent_steps (trace_id, step_number, thought, tool_name, tool_args, tool_result, observation, success, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (trace_id, step_number, thought[:1000], tool_name, tool_args[:2000], tool_result[:4000], observation[:2000], 1 if success else 0, now),
+    )
+    conn.commit()
+    step_id = cursor.lastrowid
+    conn.close()
+    return step_id
+
+
+def complete_trace(trace_id: int, status: str = "completed", output: str = "", total_steps: int = 0, total_tool_calls: int = 0) -> None:
+    """Mark a trace as completed/failed with its output."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    conn.execute(
+        "UPDATE agent_traces SET status = ?, output = ?, completed_at = ?, total_steps = ?, total_tool_calls = ? WHERE id = ?",
+        (status, output[:4000], now, total_steps, total_tool_calls, trace_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_traces(user_id: int, limit: int = 20) -> list[dict]:
+    """Get recent agent traces for a user."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM agent_traces WHERE user_id = ? ORDER BY started_at DESC LIMIT ?",
+        (user_id, limit),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_trace_steps(trace_id: int) -> list[dict]:
+    """Get all steps for a trace."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM agent_steps WHERE trace_id = ? ORDER BY step_number ASC",
+        (trace_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+# --- User Memories (Episodic) ---
+
+def save_memory(user_id: int, content: str, category: str = "fact", source_conversation_id: int | None = None, relevance_score: float = 1.0, embedding: str | None = None) -> int:
+    """Save a memory about a user. Optional embedding is a JSON string of floats."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    cursor = conn.execute(
+        "INSERT INTO user_memories (user_id, category, content, source_conversation_id, relevance_score, created_at, last_accessed, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (user_id, category, content, source_conversation_id, relevance_score, now, now, embedding),
+    )
+    conn.commit()
+    mem_id = cursor.lastrowid
+    conn.close()
+    return mem_id
+
+
+def get_memories(user_id: int, category: str | None = None, limit: int = 20) -> list[dict]:
+    """Get memories for a user, optionally filtered by category."""
+    conn = get_db()
+    if category:
+        rows = conn.execute(
+            "SELECT * FROM user_memories WHERE user_id = ? AND category = ? ORDER BY relevance_score DESC, created_at DESC LIMIT ?",
+            (user_id, category, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM user_memories WHERE user_id = ? ORDER BY relevance_score DESC, created_at DESC LIMIT ?",
+            (user_id, limit),
+        ).fetchall()
+    # Update last_accessed
+    ids = [row["id"] for row in rows]
+    if ids:
+        now = datetime.now().isoformat()
+        placeholders = ",".join("?" for _ in ids)
+        conn.execute(f"UPDATE user_memories SET last_accessed = ? WHERE id IN ({placeholders})", [now] + ids)
+        conn.commit()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def search_memories(user_id: int, query: str, limit: int = 10) -> list[dict]:
+    """Search memories by keyword (SQLite LIKE)."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM user_memories WHERE user_id = ? AND content LIKE ? ORDER BY relevance_score DESC LIMIT ?",
+        (user_id, f"%{query}%", limit),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_all_memories_with_embeddings(user_id: int) -> list[dict]:
+    """Get all memories for a user, including parsed embeddings."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM user_memories WHERE user_id = ? ORDER BY created_at DESC",
+        (user_id,),
+    ).fetchall()
+    conn.close()
+    results = []
+    for row in rows:
+        mem = dict(row)
+        raw = mem.get("embedding")
+        if raw:
+            try:
+                mem["embedding_vec"] = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                mem["embedding_vec"] = None
+        else:
+            mem["embedding_vec"] = None
+        results.append(mem)
+    return results
+
+
+def semantic_search_memories(user_id: int, query_embedding: list[float], limit: int = 10, threshold: float = 0.3) -> list[dict]:
+    """Search memories by cosine similarity against a query embedding."""
+    from .embeddings import cosine_similarity
+
+    all_memories = get_all_memories_with_embeddings(user_id)
+    scored = []
+    for mem in all_memories:
+        vec = mem.get("embedding_vec")
+        if not vec:
+            continue
+        sim = cosine_similarity(query_embedding, vec)
+        if sim >= threshold:
+            scored.append((sim, mem))
+
+    scored.sort(key=lambda x: -x[0])
+    return [m for _, m in scored[:limit]]
+
+
+# --- Agent Trace Feedback ---
+
+def set_trace_feedback(trace_id: int, user_id: int, feedback: str) -> bool:
+    """Set feedback on a trace. Returns True if updated."""
+    conn = get_db()
+    cursor = conn.execute(
+        "UPDATE agent_traces SET feedback = ? WHERE id = ? AND user_id = ?",
+        (feedback, trace_id, user_id),
+    )
+    conn.commit()
+    updated = cursor.rowcount > 0
+    conn.close()
+    return updated
+
+
+def get_feedback_stats(user_id: int) -> dict:
+    """Get feedback statistics for a user's traces."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT feedback, COUNT(*) as cnt FROM agent_traces WHERE user_id = ? AND feedback IS NOT NULL GROUP BY feedback",
+        (user_id,),
+    ).fetchall()
+    conn.close()
+    return {row["feedback"]: row["cnt"] for row in rows}
+
+
+# --- Notifications ---
+
+def create_notification(user_id: int, type: str, title: str, message: str, data: str = "{}") -> int:
+    """Create a notification for a user."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    cursor = conn.execute(
+        "INSERT INTO notifications (user_id, type, title, message, data, read, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)",
+        (user_id, type, title, message, data, now),
+    )
+    conn.commit()
+    nid = cursor.lastrowid
+    conn.close()
+    return nid
+
+
+def get_notifications(user_id: int, unread_only: bool = False, limit: int = 50) -> list[dict]:
+    """Get notifications for a user, most recent first."""
+    conn = get_db()
+    query = "SELECT * FROM notifications WHERE user_id = ?"
+    params: list[Any] = [user_id]
+    if unread_only:
+        query += " AND read = 0"
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def mark_notification_read(nid: int, user_id: int) -> bool:
+    """Mark a single notification as read."""
+    conn = get_db()
+    cursor = conn.execute(
+        "UPDATE notifications SET read = 1 WHERE id = ? AND user_id = ?",
+        (nid, user_id),
+    )
+    conn.commit()
+    updated = cursor.rowcount > 0
+    conn.close()
+    return updated
+
+
+def mark_all_notifications_read(user_id: int) -> int:
+    """Mark all notifications as read for a user. Returns count updated."""
+    conn = get_db()
+    cursor = conn.execute(
+        "UPDATE notifications SET read = 1 WHERE user_id = ? AND read = 0",
+        (user_id,),
+    )
+    conn.commit()
+    count = cursor.rowcount
+    conn.close()
+    return count
+
+
+def get_unread_notification_count(user_id: int) -> int:
+    """Get count of unread notifications for a user."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT COUNT(*) as cnt FROM notifications WHERE user_id = ? AND read = 0",
+        (user_id,),
+    ).fetchone()
+    conn.close()
+    return row["cnt"] if row else 0
+
+
+# --- Goals ---
+
+def create_goal(user_id: int, title: str, description: str = "") -> int:
+    """Create a new goal and return its ID."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    cursor = conn.execute(
+        "INSERT INTO goals (user_id, title, description, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?)",
+        (user_id, title, description, now, now),
+    )
+    conn.commit()
+    goal_id = cursor.lastrowid
+    conn.close()
+    return goal_id
+
+
+def add_goal_step(goal_id: int, step_number: int, title: str, description: str = "", agent_name: str = "") -> int:
+    """Add a step to a goal."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    cursor = conn.execute(
+        "INSERT INTO goal_steps (goal_id, step_number, title, description, agent_name, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+        (goal_id, step_number, title, description, agent_name, now),
+    )
+    conn.commit()
+    step_id = cursor.lastrowid
+    conn.close()
+    return step_id
+
+
+def get_goals(user_id: int, status: str | None = None) -> list[dict]:
+    """Get goals for a user, optionally filtered by status."""
+    conn = get_db()
+    if status:
+        rows = conn.execute(
+            "SELECT * FROM goals WHERE user_id = ? AND status = ? ORDER BY updated_at DESC",
+            (user_id, status),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM goals WHERE user_id = ? ORDER BY updated_at DESC",
+            (user_id,),
+        ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_goal(goal_id: int, user_id: int) -> dict | None:
+    """Get a goal by ID with ownership check."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM goals WHERE id = ? AND user_id = ?",
+        (goal_id, user_id),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_goal_steps(goal_id: int) -> list[dict]:
+    """Get all steps for a goal."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM goal_steps WHERE goal_id = ? ORDER BY step_number ASC",
+        (goal_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def update_goal_status(goal_id: int, status: str) -> None:
+    """Update a goal's status."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    conn.execute(
+        "UPDATE goals SET status = ?, updated_at = ? WHERE id = ?",
+        (status, now, goal_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_goal_step(step_id: int, status: str, output: str = "", trace_id: int | None = None) -> None:
+    """Update a goal step's status and output."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    completed_at = now if status in ("completed", "failed", "skipped") else None
+    conn.execute(
+        "UPDATE goal_steps SET status = ?, output = ?, trace_id = ?, completed_at = ? WHERE id = ?",
+        (status, output[:4000], trace_id, completed_at, step_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_next_pending_step(goal_id: int) -> dict | None:
+    """Get the next pending step for a goal."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM goal_steps WHERE goal_id = ? AND status = 'pending' ORDER BY step_number ASC LIMIT 1",
+        (goal_id,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
 

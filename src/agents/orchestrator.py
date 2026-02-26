@@ -1,10 +1,14 @@
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from .scout import create_scout_agent
 from .forge import create_forge_agent
 from .match import create_match_agent
 from .coach import create_coach_agent
+from .router import RoutingDecision
+from .protocol import AgentMessage, MessageBus
+from .. import database as db
+from ..episodic_memory import EpisodicMemory, extract_memories_from_output
 
 
 @dataclass
@@ -13,6 +17,7 @@ class AgentResult:
     agent_name: str
     output: str
     success: bool
+    trace_id: int | None = None
 
 
 class Orchestrator:
@@ -29,6 +34,13 @@ class Orchestrator:
       Coach  →  prepares interview questions and strategy
     """
 
+    AGENT_FACTORIES = {
+        "scout": create_scout_agent,
+        "match": create_match_agent,
+        "forge": create_forge_agent,
+        "coach": create_coach_agent,
+    }
+
     def __init__(self, provider: str = "groq", model: str | None = None):
         self.provider = provider
         self.model = model
@@ -38,21 +50,364 @@ class Orchestrator:
     def results(self) -> list[AgentResult]:
         return self._results
 
-    def _run_agent(self, agent, task: str) -> AgentResult:
+    def dispatch(
+        self,
+        routing: RoutingDecision,
+        user_message: str,
+        resume_text: str = "",
+        profile: dict | None = None,
+        history: list[dict] | None = None,
+        on_agent_status: Any = None,
+        user_id: int | None = None,
+        conversation_id: int | None = None,
+        cancel_check: Callable[[], bool] | None = None,
+        on_agent_thought: Callable[[str, str, str], None] | None = None,
+        on_evaluator: Callable[[dict], None] | None = None,
+    ) -> list[AgentResult]:
+        """Dispatch agents based on a routing decision.
+
+        Runs agents in an evaluator-driven loop with structured communication
+        via MessageBus. Calls on_agent_status(agent_name, status) if provided.
+
+        Args:
+            cancel_check: Optional callback returning True to stop dispatch
+            on_agent_thought: Optional callback(agent_name, thought, tool_name) for reasoning
+            on_evaluator: Optional callback(decision_dict) for evaluator events
+
+        Returns list of AgentResult from all dispatched agents.
+        """
+        self._results.clear()
+        bus = MessageBus()
+
+        # Post user request to bus
+        bus.send(AgentMessage(
+            sender="user",
+            receiver="orchestrator",
+            msg_type="request",
+            payload={"message": user_message, "intent": routing.intent},
+        ))
+
+        # Import evaluator (Phase 2) and learner (Phase 5) if available
+        evaluator = None
+        learner = None
+        try:
+            from .evaluator import PipelineEvaluator
+            evaluator = PipelineEvaluator()
+        except ImportError:
+            pass
+        try:
+            from .learner import AgentLearner
+            learner = AgentLearner()
+        except ImportError:
+            pass
+
+        # Memory tools injection (Phase 4)
+        memory_tools = []
+        try:
+            from ..tools.memory_tools import RecallMemoryTool, StoreMemoryTool, RecallTraceTool
+            if user_id:
+                recall = RecallMemoryTool()
+                recall.set_user_id(user_id)
+                store = StoreMemoryTool()
+                store.set_user_id(user_id)
+                recall_trace = RecallTraceTool()
+                recall_trace.set_user_id(user_id)
+                memory_tools = [recall, store, recall_trace]
+        except ImportError:
+            pass
+
+        # Shared delegation counter (Phase 7 — Agent Self-Delegation)
+        delegate_total_runs: list[int] = [0]
+
+        remaining_agents = list(routing.agents)
+        max_iterations = len(remaining_agents) + 3  # Allow up to 3 extra for loops/additions
+        iteration = 0
+
+        while remaining_agents and iteration < max_iterations:
+            iteration += 1
+            agent_name = remaining_agents.pop(0)
+
+            factory = self.AGENT_FACTORIES.get(agent_name)
+            if not factory:
+                continue
+
+            # Check cancellation
+            if cancel_check and cancel_check():
+                break
+
+            if on_agent_status:
+                on_agent_status(agent_name, "running")
+
+            # Build task with structured bus context (replaces string concat)
+            task = self._build_agent_task(
+                agent_name=agent_name,
+                user_message=user_message,
+                extracted_context=routing.extracted_context,
+                resume_text=resume_text,
+                profile=profile,
+                prior_output="",  # No longer using raw string; bus provides context
+            )
+
+            # Inject learned experience context (Phase 5)
+            if learner and user_id:
+                try:
+                    expertise = learner.get_expertise_context(user_id, agent_name)
+                    if expertise:
+                        task = task + "\n\n" + expertise
+                except Exception:
+                    pass
+
+            # Create trace for this agent run
+            trace_id = None
+            if user_id:
+                try:
+                    trace_id = db.create_trace(
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        agent_name=agent_name,
+                        intent=routing.intent,
+                        task=task,
+                    )
+                except Exception:
+                    pass
+
+            agent = factory(self.provider, self.model)
+
+            # Register memory tools in agent's registry (Phase 4)
+            for tool in memory_tools:
+                agent.registry.register(tool)
+
+            # Register delegate tool (Phase 7 — Agent Self-Delegation)
+            try:
+                from ..tools.delegate_tool import DelegateToAgentTool
+                delegate_tool = DelegateToAgentTool()
+                delegate_tool.set_context(
+                    user_id=user_id,
+                    message_bus=bus,
+                    depth=0,
+                    total_runs=delegate_total_runs,
+                    provider=self.provider,
+                    model=self.model,
+                    cancel_check=cancel_check,
+                )
+                agent.registry.register(delegate_tool)
+            except ImportError:
+                pass
+
+            # Build thought callback scoped to this agent
+            thought_cb = None
+            if on_agent_thought:
+                _name = agent_name
+                thought_cb = lambda thought, tool, _n=_name: on_agent_thought(_n, thought, tool)
+
+            result = self._run_agent(
+                agent, task,
+                trace_id=trace_id,
+                message_bus=bus,
+                cancel_check=cancel_check,
+                on_thought=thought_cb,
+            )
+
+            # Post result to message bus as structured response
+            if result.success:
+                bus.send(AgentMessage(
+                    sender=agent_name,
+                    receiver="orchestrator",
+                    msg_type="response",
+                    payload={
+                        "output": result.output,
+                        "confidence": 0.8,  # Default; agents can override
+                        "needs_more_data": False,
+                    },
+                    trace_id=trace_id,
+                ))
+
+                # Extract and store memories from successful agent output
+                if user_id:
+                    try:
+                        facts = extract_memories_from_output(result.output, user_message)
+                        memory = EpisodicMemory(user_id)
+                        for fact in facts:
+                            memory.remember(
+                                content=fact["content"],
+                                category=fact["category"],
+                                conversation_id=conversation_id,
+                            )
+                    except Exception:
+                        pass
+            else:
+                bus.send(AgentMessage(
+                    sender=agent_name,
+                    receiver="orchestrator",
+                    msg_type="error",
+                    payload={"output": result.output},
+                    trace_id=trace_id,
+                ))
+
+            if on_agent_status:
+                status = "complete" if result.success else "failed"
+                on_agent_status(agent_name, status)
+
+            # Run evaluator (Phase 2) to decide next step
+            if evaluator and result.success:
+                try:
+                    decision = evaluator.evaluate(
+                        agent_result=result,
+                        message_bus=bus,
+                        remaining_agents=remaining_agents,
+                        routing=routing,
+                    )
+
+                    # Post evaluator decision as observation
+                    bus.send(AgentMessage(
+                        sender="evaluator",
+                        receiver="orchestrator",
+                        msg_type="observation",
+                        payload={
+                            "note": f"[{decision.action}] {decision.reason}",
+                            "action": decision.action,
+                            "target": decision.target_agent,
+                        },
+                    ))
+
+                    if on_evaluator:
+                        on_evaluator({
+                            "decision": decision.action,
+                            "reason": decision.reason,
+                            "target_agent": decision.target_agent,
+                        })
+
+                    if decision.action == "stop":
+                        remaining_agents.clear()
+                    elif decision.action == "skip_next" and remaining_agents:
+                        skipped = remaining_agents.pop(0)
+                        bus.send(AgentMessage(
+                            sender="evaluator",
+                            receiver="orchestrator",
+                            msg_type="observation",
+                            payload={"note": f"Skipped {skipped}: {decision.reason}"},
+                        ))
+                    elif decision.action == "loop_back" and decision.target_agent:
+                        remaining_agents.insert(0, decision.target_agent)
+                    elif decision.action == "add_agent" and decision.target_agent:
+                        if decision.target_agent not in remaining_agents:
+                            remaining_agents.append(decision.target_agent)
+                    # "continue" → do nothing, proceed normally
+                except Exception:
+                    pass  # Evaluator failure shouldn't break the pipeline
+
+            # Handle delegation requests from the bus
+            for deleg in bus.get_delegations():
+                target = deleg.payload.get("target_agent")
+                if target and target not in remaining_agents and target in self.AGENT_FACTORIES:
+                    remaining_agents.insert(0, target)
+
+        return self._results
+
+    def _build_agent_task(
+        self,
+        agent_name: str,
+        user_message: str,
+        extracted_context: dict,
+        resume_text: str = "",
+        profile: dict | None = None,
+        prior_output: str = "",
+    ) -> str:
+        """Construct the right task string per agent type using extracted context."""
+        company = extracted_context.get("company") or "the company"
+        role = extracted_context.get("role") or (profile.get("target_role") if profile else "") or "the role"
+        skills = extracted_context.get("skills") or []
+
+        parts = [f"User request: {user_message}"]
+
+        if profile:
+            profile_parts = []
+            if profile.get("target_role"):
+                profile_parts.append(f"Target role: {profile['target_role']}")
+            if profile.get("experience_level"):
+                profile_parts.append(f"Experience: {profile['experience_level']}")
+            if profile.get("skills"):
+                profile_parts.append(f"Skills: {', '.join(profile['skills'][:15])}")
+            if profile.get("location"):
+                profile_parts.append(f"Location: {profile['location']}")
+            if profile_parts:
+                parts.append("User profile:\n" + "\n".join(profile_parts))
+
+        if agent_name == "scout":
+            keywords = skills or [role]
+            parts.append(
+                f"Search for jobs matching: {', '.join(keywords)}. "
+                f"Focus on {role} roles{f' at {company}' if company != 'the company' else ''}. "
+                f"Find the top results and research the most promising companies."
+            )
+
+        elif agent_name == "match":
+            parts.append(f"Analyze compatibility for {role} at {company}.")
+            if resume_text:
+                parts.append(f"Resume:\n{resume_text[:3000]}")
+            if extracted_context.get("has_jd"):
+                parts.append("The job description was provided in the user's message above.")
+            parts.append(
+                "Parse the job requirements, analyze the resume, match skills, "
+                "and score ATS compatibility. Produce a detailed analysis."
+            )
+
+        elif agent_name == "forge":
+            parts.append(
+                f"Write application materials for {role} at {company}. "
+                f"Rewrite resume bullets to match the role and generate a tailored cover letter."
+            )
+            if resume_text:
+                parts.append(f"Resume:\n{resume_text[:2000]}")
+
+        elif agent_name == "coach":
+            parts.append(
+                f"Prepare interview questions for {role} at {company}. "
+                f"Generate likely questions with talking points and strategic advice."
+            )
+
+        if prior_output:
+            parts.append(f"Context from previous agents:{prior_output[:3000]}")
+
+        return "\n\n".join(parts)
+
+    def _run_agent(
+        self,
+        agent,
+        task: str,
+        trace_id: int | None = None,
+        message_bus: MessageBus | None = None,
+        cancel_check: Callable[[], bool] | None = None,
+        on_thought: Callable[[str, str], None] | None = None,
+    ) -> AgentResult:
         """Run a single agent and capture its result."""
         try:
-            output = agent.run(task)
+            output = agent.run(
+                task,
+                trace_id=trace_id,
+                message_bus=message_bus,
+                cancel_check=cancel_check,
+                on_thought=on_thought,
+            )
             result = AgentResult(
                 agent_name=agent.name,
                 output=output,
                 success=True,
+                trace_id=trace_id,
             )
         except Exception as e:
             result = AgentResult(
                 agent_name=agent.name,
                 output=f"Agent failed: {str(e)}",
                 success=False,
+                trace_id=trace_id,
             )
+            # Mark trace as failed
+            if trace_id:
+                try:
+                    db.complete_trace(trace_id, "failed", str(e))
+                except Exception:
+                    pass
         self._results.append(result)
         return result
 
