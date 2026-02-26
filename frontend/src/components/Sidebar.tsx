@@ -7,9 +7,10 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Trash2,
+  LogOut,
 } from "lucide-react";
 import { useState } from "react";
-import type { Conversation } from "../types";
+import type { Conversation, User } from "../types";
 
 interface SidebarProps {
   activeTab: string;
@@ -21,6 +22,8 @@ interface SidebarProps {
   activeConversationId: number | null;
   onSelectConversation: (id: number) => void;
   onDeleteConversation: (id: number) => void;
+  user: User;
+  onLogout: () => void;
 }
 
 const tabs = [
@@ -76,9 +79,18 @@ export default function Sidebar({
   activeConversationId,
   onSelectConversation,
   onDeleteConversation,
+  user,
+  onLogout,
 }: SidebarProps) {
   const [hoveredId, setHoveredId] = useState<number | null>(null);
   const dateGroups = groupByDate(conversations);
+
+  const initials = (user.name || user.email)
+    .split(/[\s@]/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((s) => s[0].toUpperCase())
+    .join("");
 
   return (
     <aside
@@ -189,13 +201,35 @@ export default function Sidebar({
       {/* Spacer when collapsed (so footer stays at bottom) */}
       {!open && <div className="flex-1" />}
 
-      {/* Footer */}
-      <div
-        className={`p-3 border-t border-zinc-800 text-xs text-zinc-600 ${
-          open ? "" : "text-center"
-        }`}
-      >
-        {open ? "Multi-Agent AI Platform" : "AI"}
+      {/* User footer */}
+      <div className="p-3 border-t border-zinc-800">
+        {open ? (
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-full bg-teal-600/20 flex items-center justify-center shrink-0 text-xs font-semibold text-teal-400">
+              {initials}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm text-zinc-200 truncate">
+                {user.name || user.email}
+              </p>
+            </div>
+            <button
+              onClick={onLogout}
+              className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800"
+              title="Sign out"
+            >
+              <LogOut size={16} />
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={onLogout}
+            className="w-full flex justify-center p-2 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800"
+            title="Sign out"
+          >
+            <LogOut size={16} />
+          </button>
+        )}
       </div>
     </aside>
   );

@@ -21,6 +21,14 @@ def init_db() -> None:
     """Create database tables if they don't exist, and run migrations."""
     conn = get_db()
     conn.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            name TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS jobs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT NOT NULL,
@@ -80,6 +88,18 @@ def init_db() -> None:
         conn.execute("ALTER TABLE chat_history ADD COLUMN conversation_id INTEGER REFERENCES conversations(id) ON DELETE CASCADE")
         conn.commit()
 
+    # Migration: add user_id column to conversations if it doesn't exist
+    conv_cols = [row["name"] for row in conn.execute("PRAGMA table_info(conversations)").fetchall()]
+    if "user_id" not in conv_cols:
+        conn.execute("ALTER TABLE conversations ADD COLUMN user_id INTEGER REFERENCES users(id)")
+        conn.commit()
+
+    # Migration: add google_id column to users if it doesn't exist
+    user_cols = [row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()]
+    if "google_id" not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN google_id TEXT")
+        conn.commit()
+
     # Migrate orphaned messages (those without a conversation_id) into a "Previous Chat" conversation
     orphan = conn.execute("SELECT COUNT(*) as cnt FROM chat_history WHERE conversation_id IS NULL").fetchone()
     if orphan["cnt"] > 0:
@@ -95,15 +115,63 @@ def init_db() -> None:
     conn.close()
 
 
+# --- User CRUD ---
+
+def create_user(email: str, password_hash: str | None, name: str, google_id: str | None = None) -> int:
+    """Create a new user and return their ID."""
+    conn = get_db()
+    now = datetime.now().isoformat()
+    cursor = conn.execute(
+        "INSERT INTO users (email, password_hash, name, created_at, google_id) VALUES (?, ?, ?, ?, ?)",
+        (email, password_hash or "", name, now, google_id),
+    )
+    conn.commit()
+    user_id = cursor.lastrowid
+    conn.close()
+    return user_id
+
+
+def get_user_by_google_id(google_id: str) -> dict | None:
+    """Get a user by Google ID."""
+    conn = get_db()
+    row = conn.execute("SELECT * FROM users WHERE google_id = ?", (google_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def link_google_id(user_id: int, google_id: str) -> None:
+    """Link a Google ID to an existing user account."""
+    conn = get_db()
+    conn.execute("UPDATE users SET google_id = ? WHERE id = ?", (google_id, user_id))
+    conn.commit()
+    conn.close()
+
+
+def get_user_by_email(email: str) -> dict | None:
+    """Get a user by email."""
+    conn = get_db()
+    row = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_user_by_id(user_id: int) -> dict | None:
+    """Get a user by ID."""
+    conn = get_db()
+    row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
 # --- Conversation CRUD ---
 
-def create_conversation(title: str) -> int:
+def create_conversation(title: str, user_id: int | None = None) -> int:
     """Create a new conversation and return its ID."""
     conn = get_db()
     now = datetime.now().isoformat()
     cursor = conn.execute(
-        "INSERT INTO conversations (title, created_at, updated_at) VALUES (?, ?, ?)",
-        (title, now, now),
+        "INSERT INTO conversations (title, created_at, updated_at, user_id) VALUES (?, ?, ?, ?)",
+        (title, now, now, user_id),
     )
     conn.commit()
     conv_id = cursor.lastrowid
@@ -111,12 +179,18 @@ def create_conversation(title: str) -> int:
     return conv_id
 
 
-def get_conversations() -> list[dict]:
-    """Get all conversations, most recent first."""
+def get_conversations(user_id: int | None = None) -> list[dict]:
+    """Get conversations, most recent first. Optionally filtered by user."""
     conn = get_db()
-    rows = conn.execute(
-        "SELECT * FROM conversations ORDER BY updated_at DESC"
-    ).fetchall()
+    if user_id is not None:
+        rows = conn.execute(
+            "SELECT * FROM conversations WHERE user_id = ? ORDER BY updated_at DESC",
+            (user_id,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM conversations ORDER BY updated_at DESC"
+        ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
@@ -125,6 +199,17 @@ def get_conversation(conv_id: int) -> dict | None:
     """Get a single conversation by ID."""
     conn = get_db()
     row = conn.execute("SELECT * FROM conversations WHERE id = ?", (conv_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_conversation_for_user(conv_id: int, user_id: int) -> dict | None:
+    """Get a conversation only if it belongs to the given user."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM conversations WHERE id = ? AND user_id = ?",
+        (conv_id, user_id),
+    ).fetchone()
     conn.close()
     return dict(row) if row else None
 
@@ -280,6 +365,3 @@ def save_analysis(application_id: int, agent_name: str, output: str) -> int:
     conn.close()
     return analysis_id
 
-
-# Initialize DB on import
-init_db()

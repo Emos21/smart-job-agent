@@ -2,7 +2,7 @@ import os
 import json
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 from . import database as db
+from .auth import hash_password, verify_password, create_token, get_current_user, verify_google_token
 from .tools.job_search import JobSearchTool
 from .tools.jd_parser import JDParserTool
 from .tools.resume_analyzer import ResumeAnalyzerTool
@@ -50,6 +51,21 @@ if os.path.exists(frontend_dist):
 
 
 # --- Request/Response Models ---
+
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+    name: str = ""
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class GoogleAuthRequest(BaseModel):
+    credential: str
+
 
 class SearchRequest(BaseModel):
     keywords: list[str]
@@ -91,6 +107,78 @@ class RenameConversationRequest(BaseModel):
     title: str
 
 
+# --- Auth Routes ---
+
+@app.post("/api/auth/register")
+def register(req: RegisterRequest):
+    """Register a new user."""
+    if not req.email or not req.password:
+        raise HTTPException(status_code=400, detail="Email and password are required")
+    if len(req.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+
+    existing = db.get_user_by_email(req.email.lower().strip())
+    if existing:
+        raise HTTPException(status_code=409, detail="An account with this email already exists")
+
+    password_hash = hash_password(req.password)
+    user_id = db.create_user(req.email.lower().strip(), password_hash, req.name.strip())
+    user = db.get_user_by_id(user_id)
+    token = create_token(user_id)
+
+    return {
+        "token": token,
+        "user": {"id": user["id"], "email": user["email"], "name": user["name"]},
+    }
+
+
+@app.post("/api/auth/login")
+def login(req: LoginRequest):
+    """Log in an existing user."""
+    user = db.get_user_by_email(req.email.lower().strip())
+    if not user or not user["password_hash"] or not verify_password(req.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    token = create_token(user["id"])
+    return {
+        "token": token,
+        "user": {"id": user["id"], "email": user["email"], "name": user["name"]},
+    }
+
+
+@app.post("/api/auth/google")
+def google_auth(req: GoogleAuthRequest):
+    """Authenticate with a Google ID token."""
+    info = verify_google_token(req.credential)
+    email = info["email"].lower().strip()
+    name = info["name"]
+    google_id = info["google_id"]
+
+    # Check if user exists by google_id
+    user = db.get_user_by_google_id(google_id)
+    if not user:
+        # Check if user exists by email (link Google to existing account)
+        user = db.get_user_by_email(email)
+        if user:
+            db.link_google_id(user["id"], google_id)
+        else:
+            # Create new user (no password)
+            user_id = db.create_user(email, None, name, google_id=google_id)
+            user = db.get_user_by_id(user_id)
+
+    token = create_token(user["id"])
+    return {
+        "token": token,
+        "user": {"id": user["id"], "email": user["email"], "name": user["name"]},
+    }
+
+
+@app.get("/api/auth/me")
+def me(user: dict = Depends(get_current_user)):
+    """Return the currently authenticated user."""
+    return {"id": user["id"], "email": user["email"], "name": user["name"]}
+
+
 # --- API Routes ---
 
 @app.get("/api/health")
@@ -99,7 +187,7 @@ def health_check():
 
 
 @app.post("/api/search")
-def search_jobs(req: SearchRequest):
+def search_jobs(req: SearchRequest, user: dict = Depends(get_current_user)):
     """Search for jobs across multiple boards."""
     tool = JobSearchTool()
     result = tool.execute(keywords=req.keywords, max_results=req.max_results)
@@ -107,7 +195,7 @@ def search_jobs(req: SearchRequest):
 
 
 @app.post("/api/analyze")
-def analyze_job(req: AnalyzeRequest):
+def analyze_job(req: AnalyzeRequest, user: dict = Depends(get_current_user)):
     """Analyze a JD against a resume using the Match agent pipeline."""
     # Parse JD
     jd_tool = JDParserTool()
@@ -141,8 +229,8 @@ def analyze_job(req: AnalyzeRequest):
 
 
 @app.post("/api/pipeline")
-def run_pipeline(req: PipelineRequest):
-    """Run the full multi-agent pipeline (Match → Forge → Coach)."""
+def run_pipeline(req: PipelineRequest, user: dict = Depends(get_current_user)):
+    """Run the full multi-agent pipeline (Match -> Forge -> Coach)."""
     # Read resume text
     resume_tool = ResumeAnalyzerTool()
     resume_result = resume_tool.execute(file_path=req.resume_path)
@@ -167,33 +255,33 @@ def run_pipeline(req: PipelineRequest):
 
 
 @app.post("/api/jobs/save")
-def save_job(req: SaveJobRequest):
+def save_job(req: SaveJobRequest, user: dict = Depends(get_current_user)):
     """Save a job to the tracker."""
     job_id = db.save_job(req.model_dump())
     return {"id": job_id, "message": "Job saved"}
 
 
 @app.get("/api/jobs")
-def list_jobs():
+def list_jobs(user: dict = Depends(get_current_user)):
     """Get all saved jobs."""
     return db.get_jobs()
 
 
 @app.post("/api/applications/{job_id}")
-def create_application(job_id: int, jd_text: str = ""):
+def create_application(job_id: int, jd_text: str = "", user: dict = Depends(get_current_user)):
     """Create an application for a saved job."""
     app_id = db.create_application(job_id, jd_text)
     return {"id": app_id, "message": "Application created"}
 
 
 @app.get("/api/applications")
-def list_applications(status: str | None = None):
+def list_applications(status: str | None = None, user: dict = Depends(get_current_user)):
     """Get all applications, optionally filtered by status."""
     return db.get_applications(status)
 
 
 @app.patch("/api/applications/{app_id}")
-def update_application(app_id: int, req: UpdateApplicationRequest):
+def update_application(app_id: int, req: UpdateApplicationRequest, user: dict = Depends(get_current_user)):
     """Update an application's status or notes."""
     updates = {k: v for k, v in req.model_dump().items() if v is not None}
     if not updates:
@@ -205,23 +293,23 @@ def update_application(app_id: int, req: UpdateApplicationRequest):
 # --- Conversation endpoints ---
 
 @app.get("/api/conversations")
-def list_conversations():
-    """Get all conversations, most recent first."""
-    return db.get_conversations()
+def list_conversations(user: dict = Depends(get_current_user)):
+    """Get all conversations for the current user, most recent first."""
+    return db.get_conversations(user_id=user["id"])
 
 
 @app.post("/api/conversations")
-def create_conversation_endpoint():
+def create_conversation_endpoint(user: dict = Depends(get_current_user)):
     """Create a new empty conversation."""
-    conv_id = db.create_conversation("New Chat")
+    conv_id = db.create_conversation("New Chat", user_id=user["id"])
     conv = db.get_conversation(conv_id)
     return conv
 
 
 @app.delete("/api/conversations/{conv_id}")
-def delete_conversation(conv_id: int):
+def delete_conversation(conv_id: int, user: dict = Depends(get_current_user)):
     """Delete a conversation and all its messages."""
-    conv = db.get_conversation(conv_id)
+    conv = db.get_conversation_for_user(conv_id, user["id"])
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
     db.delete_conversation(conv_id)
@@ -229,9 +317,9 @@ def delete_conversation(conv_id: int):
 
 
 @app.patch("/api/conversations/{conv_id}")
-def rename_conversation(conv_id: int, req: RenameConversationRequest):
+def rename_conversation(conv_id: int, req: RenameConversationRequest, user: dict = Depends(get_current_user)):
     """Rename a conversation."""
-    conv = db.get_conversation(conv_id)
+    conv = db.get_conversation_for_user(conv_id, user["id"])
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
     db.update_conversation_title(conv_id, req.title)
@@ -239,9 +327,9 @@ def rename_conversation(conv_id: int, req: RenameConversationRequest):
 
 
 @app.get("/api/conversations/{conv_id}/messages")
-def get_conversation_messages(conv_id: int):
+def get_conversation_messages(conv_id: int, user: dict = Depends(get_current_user)):
     """Get messages for a specific conversation."""
-    conv = db.get_conversation(conv_id)
+    conv = db.get_conversation_for_user(conv_id, user["id"])
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return db.get_chat_history(conv_id)
@@ -313,14 +401,19 @@ def _run_tool_action(msg: str) -> str | None:
 
 
 @app.post("/api/chat")
-def chat(req: ChatRequest):
+def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     """Handle a chat message using LLM with tool augmentation."""
     conversation_id = req.conversation_id
 
     # Auto-create conversation if none provided
     if conversation_id is None:
         title = _truncate_title(req.message)
-        conversation_id = db.create_conversation(title)
+        conversation_id = db.create_conversation(title, user_id=user["id"])
+    else:
+        # Verify ownership
+        conv = db.get_conversation_for_user(conversation_id, user["id"])
+        if not conv:
+            raise HTTPException(status_code=404, detail="Conversation not found")
 
     db.save_chat_message("user", req.message, conversation_id)
 
