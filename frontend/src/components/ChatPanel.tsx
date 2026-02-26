@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import { Bot, ArrowUp, Mic, MicOff, Briefcase, FileText, Target, MessageSquare } from "lucide-react";
 import { useSpeechRecognition } from "../hooks/useSpeechRecognition";
+import { apiFetch } from "../lib/api";
 import type { ChatMessage } from "../types";
 
 const suggestions = [
@@ -40,7 +41,7 @@ export default function ChatPanel({ conversationId, onConversationCreated }: Cha
   // Load messages for existing conversation, or start empty
   useEffect(() => {
     if (conversationId) {
-      fetch(`/api/conversations/${conversationId}/messages`)
+      apiFetch(`/api/conversations/${conversationId}/messages`)
         .then((r) => r.json())
         .then(setMessages)
         .catch(() => {});
@@ -77,9 +78,8 @@ export default function ChatPanel({ conversationId, onConversationCreated }: Cha
     setLoading(true);
 
     try {
-      const res = await fetch("/api/chat", {
+      const res = await apiFetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: userMsg,
           conversation_id: convIdRef.current,
