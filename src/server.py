@@ -22,6 +22,11 @@ from .tools.interview_prep import InterviewPrepTool
 from .tools.cover_letter import CoverLetterTool
 from .tools.resume_rewriter import ResumeRewriterTool
 from .tools.company_researcher import CompanyResearcherTool
+from .tools.github_analyzer import GitHubAnalyzerTool
+from .tools.salary_research import SalaryResearchTool
+from .tools.email_drafter import EmailDrafterTool
+from .tools.learning_path import LearningPathTool
+from .tools.mock_interview import MockInterviewTool
 from .agents.orchestrator import Orchestrator
 
 load_dotenv()
@@ -365,10 +370,15 @@ SYSTEM_PROMPT = """You are KaziAI, an intelligent AI career assistant powered by
 - Analyzing job descriptions and scoring resumes against ATS systems
 - Writing tailored cover letters and rewriting resume bullets
 - Interview preparation with targeted questions and talking points
+- Mock interviews with STAR method evaluation
 - Company research for interview context
+- GitHub portfolio analysis to identify demonstrable skills
+- Salary research with market data
+- Follow-up email drafting (thank-you, negotiation, follow-up)
+- Learning path generation for skill gaps
 - Career advice and strategy
 
-You have access to real tools that search job boards, score resumes, generate materials, and more.
+You have access to real tools that search job boards, score resumes, analyze GitHub profiles, research salaries, conduct mock interviews, generate materials, and more.
 When a user asks you to do something, USE YOUR TOOLS to actually do it — don't just give generic advice.
 
 Guidelines:
@@ -377,6 +387,7 @@ Guidelines:
 - Use markdown formatting for readability
 - When searching for jobs, extract relevant keywords from the user's message
 - When the user provides a job description, use the analysis tools
+- For mock interviews, generate a question first, then evaluate when the user answers
 - Always explain what you found and give actionable next steps"""
 
 
@@ -391,6 +402,11 @@ def _build_chat_registry() -> ToolRegistry:
     registry.register(CoverLetterTool())
     registry.register(ResumeRewriterTool())
     registry.register(CompanyResearcherTool())
+    registry.register(GitHubAnalyzerTool())
+    registry.register(SalaryResearchTool())
+    registry.register(EmailDrafterTool())
+    registry.register(LearningPathTool())
+    registry.register(MockInterviewTool())
     return registry
 
 CHAT_REGISTRY = _build_chat_registry()
