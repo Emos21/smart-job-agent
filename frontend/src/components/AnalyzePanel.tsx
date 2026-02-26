@@ -47,7 +47,7 @@ export default function AnalyzePanel() {
   function ScoreBar({ label, value }: { label: string; value: number }) {
     const pct = Math.round(value * 100);
     const color =
-      pct >= 70 ? "bg-teal-500" : pct >= 40 ? "bg-yellow-500" : "bg-red-500";
+      pct >= 70 ? "bg-green-500" : pct >= 40 ? "bg-yellow-500" : "bg-red-500";
     return (
       <div className="flex items-center gap-3 text-sm">
         <span className="w-28 text-zinc-500 text-xs">{label}</span>
@@ -86,7 +86,7 @@ export default function AnalyzePanel() {
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className="text-xs font-medium text-zinc-400">Your Resume</label>
-              <label className="flex items-center gap-1.5 text-xs text-teal-400 cursor-pointer hover:text-teal-300">
+              <label className="flex items-center gap-1.5 text-xs text-cyan-400 cursor-pointer hover:text-cyan-300">
                 <Upload size={12} />
                 <span>Upload .txt</span>
                 <input
@@ -108,7 +108,7 @@ export default function AnalyzePanel() {
           <button
             type="submit"
             disabled={loading || !jdText.trim() || !resumeText.trim()}
-            className="px-5 py-2.5 bg-teal-600 text-white rounded-xl text-sm font-medium hover:bg-teal-500 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-medium hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {loading ? "Analyzing..." : "Analyze Against Resume"}
           </button>
@@ -128,7 +128,7 @@ export default function AnalyzePanel() {
                 <BarChart3 size={16} className="text-zinc-500" />
                 <h3 className="text-sm font-semibold text-zinc-100">ATS Score</h3>
                 <span className={`ml-auto text-xs font-medium px-2 py-0.5 rounded-full ${
-                  result.ats_score.grade === "STRONG" ? "bg-teal-500/20 text-teal-400" :
+                  result.ats_score.grade === "STRONG" ? "bg-green-500/20 text-green-400" :
                   result.ats_score.grade === "MODERATE" ? "bg-yellow-500/20 text-yellow-400" :
                   "bg-red-500/20 text-red-400"
                 }`}>
@@ -139,7 +139,7 @@ export default function AnalyzePanel() {
                 <span
                   className={`text-5xl font-bold tabular-nums ${
                     result.ats_score.overall_score >= 70
-                      ? "text-teal-400"
+                      ? "text-green-400"
                       : result.ats_score.overall_score >= 40
                         ? "text-yellow-400"
                         : "text-red-400"
@@ -187,7 +187,7 @@ export default function AnalyzePanel() {
                       key={i}
                       className="text-sm text-zinc-300 flex gap-2"
                     >
-                      <span className="text-teal-500 shrink-0">-</span>
+                      <span className="text-cyan-500 shrink-0">-</span>
                       {s}
                     </li>
                   ))}
@@ -206,7 +206,7 @@ export default function AnalyzePanel() {
                     result.jd_analysis.sections as Record<string, string>
                   ).map(([section, content]) => (
                     <div key={section}>
-                      <h4 className="text-xs font-medium text-teal-400 uppercase tracking-wide">
+                      <h4 className="text-xs font-medium text-cyan-400 uppercase tracking-wide">
                         {section}
                       </h4>
                       <p className="text-sm text-zinc-400 mt-1 whitespace-pre-wrap">
