@@ -140,6 +140,11 @@ python3 -m src.cli tools
 | `generate_cover_letter` | Produce a tailored cover letter from analysis results |
 | `rewrite_resume` | Reframe resume bullets to match JD language |
 | `prepare_interview` | Generate interview questions with talking points by category |
+| `analyze_github` | Scan GitHub profile for languages, frameworks, and portfolio strength |
+| `research_salary` | Pull market salary data for a role/location/experience level |
+| `draft_email` | Generate follow-up, thank-you, negotiation, and withdrawal emails |
+| `generate_learning_path` | Create study plans with resources for skill gaps |
+| `mock_interview` | Generate questions and evaluate answers with STAR method scoring |
 
 ## How the ReAct Loop Works
 
@@ -184,7 +189,12 @@ smart-job-agent/
 │       ├── cover_letter.py   # Cover letter generator
 │       ├── resume_rewriter.py # Resume bullet rewriter
 │       ├── interview_prep.py # Interview question generator
-│       └── job_search.py     # Multi-source job search
+│       ├── job_search.py     # Multi-source job search
+│       ├── github_analyzer.py # GitHub portfolio scanner
+│       ├── salary_research.py # Market salary data
+│       ├── email_drafter.py  # Follow-up email generator
+│       ├── learning_path.py  # Skill gap study plans
+│       └── mock_interview.py # Mock interview with STAR evaluation
 ├── frontend/
 │   └── src/
 │       ├── App.tsx           # Root component with auth routing
