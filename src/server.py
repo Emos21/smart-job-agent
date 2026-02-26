@@ -12,12 +12,16 @@ from openai import OpenAI
 
 from . import database as db
 from .auth import hash_password, verify_password, create_token, get_current_user, verify_google_token
+from .tools.base import ToolRegistry
 from .tools.job_search import JobSearchTool
 from .tools.jd_parser import JDParserTool
 from .tools.resume_analyzer import ResumeAnalyzerTool
 from .tools.skills_matcher import SkillsMatcherTool
 from .tools.ats_scorer import ATSScorerTool
 from .tools.interview_prep import InterviewPrepTool
+from .tools.cover_letter import CoverLetterTool
+from .tools.resume_rewriter import ResumeRewriterTool
+from .tools.company_researcher import CompanyResearcherTool
 from .agents.orchestrator import Orchestrator
 
 load_dotenv()
@@ -74,12 +78,14 @@ class SearchRequest(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     jd_text: str
-    resume_path: str = "examples/sample_resume.txt"
+    resume_text: str = ""
+    resume_path: str = ""
 
 
 class PipelineRequest(BaseModel):
     jd_text: str
-    resume_path: str = "examples/sample_resume.txt"
+    resume_text: str = ""
+    resume_path: str = ""
     role: str = "Software Engineer"
     company: str = "the company"
 
@@ -201,12 +207,24 @@ def analyze_job(req: AnalyzeRequest, user: dict = Depends(get_current_user)):
     jd_tool = JDParserTool()
     jd_result = jd_tool.execute(source=req.jd_text)
 
-    # Read resume
-    resume_tool = ResumeAnalyzerTool()
-    resume_result = resume_tool.execute(file_path=req.resume_path)
-
-    if not resume_result.get("success"):
-        raise HTTPException(status_code=400, detail=resume_result.get("error"))
+    # Get resume text — either directly provided or from file
+    resume_text = req.resume_text.strip()
+    resume_result = {}
+    if resume_text:
+        # Resume text provided directly (from frontend paste/upload)
+        resume_result = {
+            "success": True,
+            "raw_text": resume_text,
+            "sections": {"full_resume": resume_text},
+        }
+    elif req.resume_path:
+        resume_tool = ResumeAnalyzerTool()
+        resume_result = resume_tool.execute(file_path=req.resume_path)
+        if not resume_result.get("success"):
+            raise HTTPException(status_code=400, detail=resume_result.get("error"))
+        resume_text = resume_result.get("raw_text", "")
+    else:
+        raise HTTPException(status_code=400, detail="Please provide resume text or a resume file path")
 
     # ATS Score
     jd_keywords = []
@@ -217,7 +235,7 @@ def analyze_job(req: AnalyzeRequest, user: dict = Depends(get_current_user)):
 
     ats_tool = ATSScorerTool()
     ats_result = ats_tool.execute(
-        resume_text=resume_result.get("raw_text", ""),
+        resume_text=resume_text,
         jd_keywords=jd_keywords,
     )
 
@@ -231,18 +249,23 @@ def analyze_job(req: AnalyzeRequest, user: dict = Depends(get_current_user)):
 @app.post("/api/pipeline")
 def run_pipeline(req: PipelineRequest, user: dict = Depends(get_current_user)):
     """Run the full multi-agent pipeline (Match -> Forge -> Coach)."""
-    # Read resume text
-    resume_tool = ResumeAnalyzerTool()
-    resume_result = resume_tool.execute(file_path=req.resume_path)
+    # Get resume text — either directly provided or from file
+    resume_text = req.resume_text.strip()
+    if not resume_text and req.resume_path:
+        resume_tool = ResumeAnalyzerTool()
+        resume_result = resume_tool.execute(file_path=req.resume_path)
+        if not resume_result.get("success"):
+            raise HTTPException(status_code=400, detail=resume_result.get("error"))
+        resume_text = resume_result.get("raw_text", "")
 
-    if not resume_result.get("success"):
-        raise HTTPException(status_code=400, detail=resume_result.get("error"))
+    if not resume_text:
+        raise HTTPException(status_code=400, detail="Please provide resume text or a resume file path")
 
     orchestrator = Orchestrator(provider="groq")
     result = orchestrator.full_pipeline(
         jd_text=req.jd_text,
-        resume_path=req.resume_path,
-        resume_text=resume_result.get("raw_text", ""),
+        resume_path=req.resume_path or "user_provided",
+        resume_text=resume_text,
         role=req.role,
         company=req.company,
     )
@@ -335,20 +358,43 @@ def get_conversation_messages(conv_id: int, user: dict = Depends(get_current_use
     return db.get_chat_history(conv_id)
 
 
-# --- Chat (conversation-scoped) ---
+# --- Chat (conversation-scoped, agentic with function calling) ---
 
-SYSTEM_PROMPT = """You are KaziAI, an intelligent AI career assistant. You help job seekers with:
-- Searching and finding relevant jobs
-- Analyzing job descriptions against resumes
-- ATS (Applicant Tracking System) resume optimization
-- Writing tailored cover letters
-- Interview preparation and coaching
+SYSTEM_PROMPT = """You are KaziAI, an intelligent AI career assistant powered by a multi-agent system. You help job seekers with:
+- Searching and finding relevant jobs across multiple job boards
+- Analyzing job descriptions and scoring resumes against ATS systems
+- Writing tailored cover letters and rewriting resume bullets
+- Interview preparation with targeted questions and talking points
+- Company research for interview context
 - Career advice and strategy
 
-You have access to tools that can search real job boards, score resumes, and generate materials.
-Be conversational, helpful, and proactive. Give specific, actionable advice.
-When a user asks to search for jobs, extract the key skills/role from their message.
-Keep responses concise but insightful. Use markdown formatting for readability."""
+You have access to real tools that search job boards, score resumes, generate materials, and more.
+When a user asks you to do something, USE YOUR TOOLS to actually do it — don't just give generic advice.
+
+Guidelines:
+- Be conversational, helpful, and proactive
+- Give specific, actionable responses backed by tool results
+- Use markdown formatting for readability
+- When searching for jobs, extract relevant keywords from the user's message
+- When the user provides a job description, use the analysis tools
+- Always explain what you found and give actionable next steps"""
+
+
+# Build a chat tool registry with all tools
+def _build_chat_registry() -> ToolRegistry:
+    registry = ToolRegistry()
+    registry.register(JobSearchTool())
+    registry.register(JDParserTool())
+    registry.register(SkillsMatcherTool())
+    registry.register(ATSScorerTool())
+    registry.register(InterviewPrepTool())
+    registry.register(CoverLetterTool())
+    registry.register(ResumeRewriterTool())
+    registry.register(CompanyResearcherTool())
+    return registry
+
+CHAT_REGISTRY = _build_chat_registry()
+MAX_TOOL_ROUNDS = 3
 
 
 def _get_llm_client():
@@ -370,39 +416,25 @@ def _truncate_title(text: str, max_len: int = 40) -> str:
     return truncated + "..."
 
 
-def _run_tool_action(msg: str) -> str | None:
-    """Check if the message needs a tool action and return tool results."""
-    lower = msg.lower()
-
-    if any(w in lower for w in ["search", "find", "look for", "jobs", "hiring", "openings", "vacancies"]):
-        words = msg.split()
-        stop_words = {"search", "find", "look", "jobs", "for", "with", "that", "have",
-                      "me", "some", "the", "and", "need", "want", "please", "can", "you",
-                      "asap", "now", "urgently", "remote", "job", "a", "i", "any"}
-        keywords = [w for w in words if len(w) > 2 and w.lower() not in stop_words]
-        if not keywords:
-            keywords = ["software", "engineer"]
-
-        tool = JobSearchTool()
-        result = tool.execute(keywords=keywords, max_results=5)
-        jobs = result.get("jobs", [])
-
-        if jobs:
-            tool_data = f"[SEARCH RESULTS: Found {result['total_found']} jobs]\n"
-            for i, job in enumerate(jobs, 1):
-                tool_data += (
-                    f"{i}. {job['title']} at {job['company']} "
-                    f"({job['location']}) - {job.get('url', 'No URL')}\n"
-                )
-            return tool_data
-        return "[SEARCH RESULTS: No jobs found for those keywords]"
-
-    return None
+def _execute_tool_call(name: str, arguments: dict) -> dict:
+    """Execute a tool by name and return its result."""
+    tool = CHAT_REGISTRY.get(name)
+    if tool is None:
+        return {"success": False, "error": f"Unknown tool: {name}"}
+    try:
+        return tool.execute(**arguments)
+    except Exception as e:
+        return {"success": False, "error": f"Tool failed: {str(e)}"}
 
 
 @app.post("/api/chat")
 def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
-    """Handle a chat message using LLM with tool augmentation."""
+    """Handle a chat message using LLM with agentic function calling.
+
+    The LLM autonomously decides when to call tools (job search, ATS scoring,
+    interview prep, etc.) based on the user's message. This is the ReAct pattern:
+    Reason -> Act (call tool) -> Observe (read result) -> Respond.
+    """
     conversation_id = req.conversation_id
 
     # Auto-create conversation if none provided
@@ -417,37 +449,82 @@ def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
 
     db.save_chat_message("user", req.message, conversation_id)
 
-    # Get recent chat history for context
+    # Build conversation messages from history
     history = db.get_chat_history(conversation_id, limit=20)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    for msg in history[:-1]:  # exclude current message (already in history)
+    for msg in history[:-1]:
         messages.append({"role": msg["role"], "content": msg["content"]})
+    messages.append({"role": "user", "content": req.message})
 
-    # Check if we need to run a tool and inject results
-    tool_result = _run_tool_action(req.message)
-    if tool_result:
-        messages.append({
-            "role": "user",
-            "content": f"{req.message}\n\n{tool_result}\n\nUse these results to give a helpful response.",
-        })
-    else:
-        messages.append({"role": "user", "content": req.message})
-
-    # Try LLM response
     client = _get_llm_client()
-    if client:
-        try:
+    if not client:
+        response = "AI backend not configured. Please set GROQ_API_KEY in your .env file."
+        db.save_chat_message("assistant", response, conversation_id)
+        return {"response": response, "conversation_id": conversation_id}
+
+    # Agentic loop: let the LLM call tools, feed results back, repeat
+    tool_specs = CHAT_REGISTRY.to_openai_specs()
+    response = ""
+
+    try:
+        for _round in range(MAX_TOOL_ROUNDS + 1):
             completion = client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=messages,
-                max_tokens=1024,
+                tools=tool_specs if _round < MAX_TOOL_ROUNDS else None,
+                tool_choice="auto" if _round < MAX_TOOL_ROUNDS else None,
+                max_tokens=1500,
                 temperature=0.7,
             )
-            response = completion.choices[0].message.content
-        except Exception as e:
-            response = f"I'm having trouble connecting to my AI backend: {str(e)[:100]}. Try again in a moment."
-    else:
-        response = "AI backend not configured. Please set GROQ_API_KEY in your .env file."
+
+            message = completion.choices[0].message
+
+            # If the LLM wants to call tools, execute them and loop
+            if message.tool_calls:
+                # Add the assistant's tool call message
+                messages.append({
+                    "role": "assistant",
+                    "content": message.content,
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            },
+                        }
+                        for tc in message.tool_calls
+                    ],
+                })
+
+                # Execute each tool call and add results
+                for tc in message.tool_calls:
+                    func_name = tc.function.name
+                    try:
+                        func_args = json.loads(tc.function.arguments)
+                    except json.JSONDecodeError:
+                        func_args = {}
+
+                    result = _execute_tool_call(func_name, func_args)
+                    # Truncate large results to avoid context overflow
+                    result_str = json.dumps(result, indent=2)
+                    if len(result_str) > 4000:
+                        result_str = result_str[:4000] + "\n... (truncated)"
+
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result_str,
+                    })
+                continue  # Loop back to let LLM process tool results
+
+            # No tool calls — this is the final response
+            response = message.content or "I processed your request but couldn't generate a response."
+            break
+
+    except Exception as e:
+        response = f"I ran into an issue processing your request: {str(e)[:200]}. Please try again."
 
     db.save_chat_message("assistant", response, conversation_id)
     return {"response": response, "conversation_id": conversation_id}
