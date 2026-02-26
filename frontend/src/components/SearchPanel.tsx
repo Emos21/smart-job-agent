@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Search, Bookmark } from "lucide-react";
 import PanelHeader from "./PanelHeader";
+import { apiFetch } from "../lib/api";
 import type { SearchJob } from "../types";
 
 export default function SearchPanel() {
@@ -18,9 +19,8 @@ export default function SearchPanel() {
     setLoading(true);
     setSearched(true);
     try {
-      const res = await fetch("/api/search", {
+      const res = await apiFetch("/api/search", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           keywords: keywords
             .split(",")
@@ -42,9 +42,8 @@ export default function SearchPanel() {
   async function saveJob(job: SearchJob, index: number) {
     setSaving(index);
     try {
-      await fetch("/api/jobs/save", {
+      await apiFetch("/api/jobs/save", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: job.title,
           company: job.company,
@@ -129,8 +128,14 @@ export default function SearchPanel() {
                       <p className="text-xs text-zinc-500 mt-1">
                         {job.company} — {job.location}
                       </p>
-                      {job.salary && (
-                        <p className="text-xs text-teal-400 mt-1">{job.salary}</p>
+                      {(job.salary_min || job.salary_max) && (
+                        <p className="text-xs text-teal-400 mt-1">
+                          {job.salary_min && job.salary_max
+                            ? `$${job.salary_min.toLocaleString()} - $${job.salary_max.toLocaleString()}`
+                            : job.salary_min
+                              ? `From $${job.salary_min.toLocaleString()}`
+                              : `Up to $${job.salary_max!.toLocaleString()}`}
+                        </p>
                       )}
                       <div className="flex gap-1.5 mt-2 flex-wrap">
                         {job.tags.slice(0, 5).map((tag, j) => (

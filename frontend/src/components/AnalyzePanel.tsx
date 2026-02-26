@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { BarChart3 } from "lucide-react";
 import PanelHeader from "./PanelHeader";
+import { apiFetch } from "../lib/api";
 import type { AnalysisResult } from "../types";
 
 export default function AnalyzePanel() {
@@ -18,9 +19,8 @@ export default function AnalyzePanel() {
     setResult(null);
 
     try {
-      const res = await fetch("/api/analyze", {
+      const res = await apiFetch("/api/analyze", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ jd_text: jdText }),
       });
       if (!res.ok) {
@@ -94,37 +94,43 @@ export default function AnalyzePanel() {
               <div className="flex items-center gap-2 mb-4">
                 <BarChart3 size={16} className="text-zinc-500" />
                 <h3 className="text-sm font-semibold text-zinc-100">ATS Score</h3>
+                <span className={`ml-auto text-xs font-medium px-2 py-0.5 rounded-full ${
+                  result.ats_score.grade === "STRONG" ? "bg-teal-500/20 text-teal-400" :
+                  result.ats_score.grade === "MODERATE" ? "bg-yellow-500/20 text-yellow-400" :
+                  "bg-red-500/20 text-red-400"
+                }`}>
+                  {result.ats_score.grade}
+                </span>
               </div>
               <div className="text-center mb-5">
                 <span
                   className={`text-5xl font-bold tabular-nums ${
-                    result.ats_score.score >= 70
+                    result.ats_score.overall_score >= 70
                       ? "text-teal-400"
-                      : result.ats_score.score >= 40
+                      : result.ats_score.overall_score >= 40
                         ? "text-yellow-400"
                         : "text-red-400"
                   }`}
                 >
-                  {result.ats_score.score}
+                  {result.ats_score.overall_score}
                 </span>
                 <span className="text-zinc-600 text-lg">/100</span>
               </div>
               <div className="space-y-2.5">
-                {result.ats_score.breakdown &&
-                  Object.entries(result.ats_score.breakdown).map(([key, val]) => (
-                    <ScoreBar key={key} label={key} value={val} />
-                  ))}
+                <ScoreBar label="Keywords" value={result.ats_score.keyword_analysis.keyword_match_rate / 100} />
+                <ScoreBar label="Sections" value={result.ats_score.section_analysis.section_completeness / 100} />
+                <ScoreBar label="Formatting" value={result.ats_score.formatting_analysis.formatting_score / 100} />
               </div>
             </div>
 
             {/* Missing Keywords */}
-            {result.ats_score.missing_keywords.length > 0 ? (
+            {result.ats_score.keyword_analysis.missing_keywords.length > 0 ? (
               <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-5">
                 <h3 className="text-sm font-semibold text-zinc-100 mb-3">
                   Missing Keywords
                 </h3>
                 <div className="flex flex-wrap gap-2">
-                  {result.ats_score.missing_keywords.map((kw, i) => (
+                  {result.ats_score.keyword_analysis.missing_keywords.map((kw, i) => (
                     <span
                       key={i}
                       className="text-xs bg-red-900/30 text-red-300 border border-red-900/40 px-2 py-1 rounded-lg"
