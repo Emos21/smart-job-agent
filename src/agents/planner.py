@@ -75,11 +75,18 @@ class GoalPlanner:
     @property
     def client(self):
         if self._client is None:
-            api_key = os.getenv("GROQ_API_KEY")
-            self._client = OpenAI(
-                api_key=api_key,
-                base_url="https://api.groq.com/openai/v1",
-            )
+            provider = os.getenv("LLM_PROVIDER", "groq")
+            if provider == "ollama":
+                self._client = OpenAI(
+                    api_key="ollama",
+                    base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+                )
+            else:
+                api_key = os.getenv("GROQ_API_KEY")
+                self._client = OpenAI(
+                    api_key=api_key,
+                    base_url="https://api.groq.com/openai/v1",
+                )
         return self._client
 
     def create_plan(self, goal_text: str, user_context: str = "") -> dict:
@@ -89,7 +96,7 @@ class GoalPlanner:
         """
         try:
             response = self.client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
                 messages=[
                     {"role": "system", "content": PLANNING_PROMPT},
                     {"role": "user", "content": f"Goal: {goal_text}\n\n{user_context}"},
@@ -193,7 +200,7 @@ class GoalPlanner:
             reasoning=f"Executing goal step: {step['title']}",
         )
 
-        orchestrator = Orchestrator(provider="groq")
+        orchestrator = Orchestrator(provider=os.getenv("LLM_PROVIDER", "groq"))
         results = orchestrator.dispatch(
             routing=routing,
             user_message=f"{goal['title']}: {step['description']}",
@@ -292,7 +299,7 @@ class GoalPlanner:
                 reasoning=f"Executing goal step: {step['title']}",
             )
 
-            orchestrator = Orchestrator(provider="groq")
+            orchestrator = Orchestrator(provider=os.getenv("LLM_PROVIDER", "groq"))
             results = orchestrator.dispatch(
                 routing=routing,
                 user_message=f"{goal['title']}: {step['description']}",
@@ -395,7 +402,7 @@ class GoalPlanner:
             )
 
             response = self.client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
                 messages=[
                     {"role": "system", "content": REPLAN_PROMPT},
                     {"role": "user", "content": user_msg},
