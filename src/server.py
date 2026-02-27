@@ -658,6 +658,12 @@ _CACHEABLE_TOOLS = {"search_jobs", "research_company", "analyze_github", "resear
 
 
 def _get_llm_client():
+    provider = os.getenv("LLM_PROVIDER", "groq")
+    if provider == "ollama":
+        return OpenAI(
+            api_key="ollama",
+            base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+        )
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         return None
