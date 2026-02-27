@@ -35,11 +35,22 @@ export default function AuthPage({ onAuth }: AuthPageProps) {
       });
 
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.detail || "Something went wrong");
+        let detail = "Something went wrong";
+        try {
+          const data = await res.json();
+          detail = data.detail || detail;
+        } catch {
+          detail = `Server error (${res.status})`;
+        }
+        throw new Error(detail);
       }
 
-      const data: AuthResponse = await res.json();
+      let data: AuthResponse;
+      try {
+        data = await res.json();
+      } catch {
+        throw new Error("Invalid response from server. Is the backend running?");
+      }
       setToken(data.token);
       onAuth(data.user);
     } catch (err) {
