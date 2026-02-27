@@ -135,12 +135,19 @@ class NegotiationSession:
     @property
     def client(self):
         if self._client is None:
-            api_key = os.getenv("GROQ_API_KEY")
-            if api_key:
+            provider = os.getenv("LLM_PROVIDER", "groq")
+            if provider == "ollama":
                 self._client = OpenAI(
-                    api_key=api_key,
-                    base_url="https://api.groq.com/openai/v1",
+                    api_key="ollama",
+                    base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
                 )
+            else:
+                api_key = os.getenv("GROQ_API_KEY")
+                if api_key:
+                    self._client = OpenAI(
+                        api_key=api_key,
+                        base_url="https://api.groq.com/openai/v1",
+                    )
         return self._client
 
     def run(self) -> ConsensusResult:
@@ -299,7 +306,7 @@ Respond with JSON only:
 
         try:
             response = self.client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
                 messages=[
                     {"role": "system", "content": "You are an agent in a structured debate. Respond with valid JSON only."},
                     {"role": "user", "content": prompt},
