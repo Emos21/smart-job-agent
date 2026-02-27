@@ -782,7 +782,7 @@ def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     try:
         for _round in range(MAX_TOOL_ROUNDS + 1):
             completion = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
                 messages=messages,
                 tools=tool_specs if _round < MAX_TOOL_ROUNDS else None,
                 tool_choice="auto" if _round < MAX_TOOL_ROUNDS else None,
