@@ -36,7 +36,12 @@ export async function apiFetch(
     headers.set("Content-Type", "application/json");
   }
 
-  const res = await fetch(url, { ...options, headers });
+  let res: Response;
+  try {
+    res = await fetch(url, { ...options, headers });
+  } catch (err) {
+    throw new Error("Cannot connect to the server. Is the backend running?");
+  }
 
   if (res.status === 401) {
     clearToken();
@@ -44,4 +49,17 @@ export async function apiFetch(
   }
 
   return res;
+}
+
+export async function apiJson<T>(url: string, options: RequestInit = {}): Promise<T> {
+  const res = await apiFetch(url, options);
+  if (!res.ok) {
+    let detail = `Request failed (${res.status})`;
+    try {
+      const data = await res.json();
+      detail = data.detail || detail;
+    } catch {}
+    throw new Error(detail);
+  }
+  return res.json();
 }
