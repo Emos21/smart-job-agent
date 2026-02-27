@@ -86,14 +86,21 @@ If there are no meaningful facts to extract, return: []"""
 
 def extract_memories_from_output(agent_output: str, user_message: str = "") -> list[dict]:
     """Use a cheap LLM call to extract memorable facts from agent output."""
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        return []
+    provider = os.getenv("LLM_PROVIDER", "groq")
+    if provider == "ollama":
+        client = OpenAI(
+            api_key="ollama",
+            base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+        )
+    else:
+        api_key = os.getenv("GROQ_API_KEY")
+        if not api_key:
+            return []
+        client = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
 
     try:
-        client = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
             messages=[
                 {"role": "system", "content": MEMORY_EXTRACTION_PROMPT},
                 {"role": "user", "content": f"User said: {user_message[:500]}\n\nAgent output:\n{agent_output[:2000]}"},
