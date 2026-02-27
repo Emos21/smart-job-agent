@@ -34,7 +34,7 @@ class Agent:
             "default_model": "llama-3.3-70b-versatile",
         },
         "openai": {
-            "base_url": None,  # Uses default OpenAI URL
+            "base_url": None,
             "env_key": "OPENAI_API_KEY",
             "default_model": "gpt-4o-mini",
         },
@@ -43,12 +43,17 @@ class Agent:
             "env_key": "DEEPSEEK_API_KEY",
             "default_model": "deepseek-chat",
         },
+        "ollama": {
+            "base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+            "env_key": "OLLAMA_API_KEY",
+            "default_model": os.getenv("LLM_MODEL", "llama3.1:8b"),
+        },
     }
 
     def __init__(
         self,
         registry: ToolRegistry,
-        provider: str = "groq",
+        provider: str = os.getenv("LLM_PROVIDER", "groq"),
         model: str | None = None,
     ):
         self.registry = registry
