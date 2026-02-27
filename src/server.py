@@ -92,6 +92,23 @@ def health_check():
     }
 
 
+@app.get("/api/version")
+def version_info():
+    """Return API version and available features."""
+    return {
+        "version": "1.0.0",
+        "features": {
+            "multi_agent": True,
+            "websocket_push": True,
+            "rl_optimization": True,
+            "goal_planning": True,
+            "agent_negotiation": True,
+            "episodic_memory": True,
+            "background_tasks": True,
+        },
+    }
+
+
 # --- Request/Response Models ---
 
 class RegisterRequest(BaseModel):
