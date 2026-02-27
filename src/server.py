@@ -312,7 +312,7 @@ def run_pipeline(req: PipelineRequest, user: dict = Depends(get_current_user)):
     if not resume_text:
         raise HTTPException(status_code=400, detail="Please provide resume text or a resume file path")
 
-    orchestrator = Orchestrator(provider="groq")
+    orchestrator = Orchestrator(provider=os.getenv("LLM_PROVIDER", "groq"))
     result = orchestrator.full_pipeline(
         jd_text=req.jd_text,
         resume_path=req.resume_path or "user_provided",
@@ -970,7 +970,7 @@ def _generate_direct_llm(client, messages, tool_specs):
 
 def _generate_agent_dispatch(client, messages, routing, user_message, resume_text, profile, user_id=None, conversation_id=None, cancel_check=None):
     """Generator for agent-dispatched path. Uses orchestrator with message bus, evaluator, and structured communication."""
-    orchestrator = Orchestrator(provider="groq")
+    orchestrator = Orchestrator(provider=os.getenv("LLM_PROVIDER", "groq"))
 
     # Collect events from orchestrator callbacks
     events = []
