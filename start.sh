@@ -33,8 +33,8 @@ redis-cli ping >/dev/null 2>&1 || { echo "Redis not running. Start it first."; e
 # Check Ollama if using local inference
 if [ "${LLM_PROVIDER:-}" = "ollama" ]; then
     curl -sf http://localhost:11434/api/tags >/dev/null 2>&1 || {
-        echo "Ollama not running. Starting..."
-        nohup ollama serve > /tmp/ollama.log 2>&1 &
+        echo "Ollama not running. Starting with flash attention..."
+        OLLAMA_FLASH_ATTENTION=1 nohup ollama serve > /tmp/ollama.log 2>&1 &
         sleep 3
     }
 fi
