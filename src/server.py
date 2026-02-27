@@ -912,7 +912,7 @@ def _generate_direct_llm(client, messages, tool_specs):
         is_last_round = _round >= MAX_TOOL_ROUNDS
 
         completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
             messages=messages,
             tools=tool_specs if not is_last_round else None,
             tool_choice="auto" if not is_last_round else None,
@@ -964,7 +964,7 @@ def _generate_direct_llm(client, messages, tool_specs):
 
         # Final response — stream it
         stream = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
             messages=messages,
             max_tokens=1024,
             temperature=0.6,
@@ -1048,7 +1048,7 @@ def _generate_agent_dispatch(client, messages, routing, user_message, resume_tex
 
     # Stream the final synthesized response
     stream = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
         messages=messages,
         max_tokens=2048,
         temperature=0.6,
