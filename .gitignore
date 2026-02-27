@@ -33,3 +33,12 @@ kaziai.db
 # Frontend
 frontend/node_modules/
 frontend/dist/
+
+# Celery
+celerybeat-schedule
+celerybeat-schedule.db
+
+# Local dev
+*.pid
+/tmp/
+start_kaziai.sh
