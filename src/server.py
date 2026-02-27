@@ -665,7 +665,7 @@ def _build_chat_registry() -> ToolRegistry:
     return registry
 
 CHAT_REGISTRY = _build_chat_registry()
-MAX_TOOL_ROUNDS = 6
+MAX_TOOL_ROUNDS = int(os.getenv("MAX_TOOL_ROUNDS", "6"))
 
 # Agent router for smart dispatch
 _agent_router = AgentRouter()
