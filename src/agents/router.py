@@ -84,11 +84,18 @@ class AgentRouter:
     @property
     def client(self):
         if self._client is None:
-            api_key = os.getenv("GROQ_API_KEY")
-            self._client = OpenAI(
-                api_key=api_key,
-                base_url="https://api.groq.com/openai/v1",
-            )
+            provider = os.getenv("LLM_PROVIDER", "groq")
+            if provider == "ollama":
+                self._client = OpenAI(
+                    api_key="ollama",
+                    base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+                )
+            else:
+                api_key = os.getenv("GROQ_API_KEY")
+                self._client = OpenAI(
+                    api_key=api_key,
+                    base_url="https://api.groq.com/openai/v1",
+                )
         return self._client
 
     def route(self, message: str, has_resume: bool = False, has_profile: bool = False) -> RoutingDecision:
@@ -101,7 +108,7 @@ class AgentRouter:
 
         try:
             response = self.client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
                 messages=[
                     {"role": "system", "content": ROUTING_PROMPT},
                     {"role": "user", "content": f"{message}{context_hint}"},
