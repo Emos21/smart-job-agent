@@ -12,7 +12,7 @@ from .. import database as db
 
 load_dotenv()
 
-MAX_STEPS = 15
+MAX_STEPS = int(os.getenv("AGENT_MAX_STEPS", "15"))
 
 # Provider configurations
 DEFAULT_PROVIDER = os.getenv("LLM_PROVIDER", "groq")
