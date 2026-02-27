@@ -15,6 +15,8 @@ load_dotenv()
 MAX_STEPS = 15
 
 # Provider configurations
+DEFAULT_PROVIDER = os.getenv("LLM_PROVIDER", "groq")
+
 PROVIDERS = {
     "groq": {
         "base_url": "https://api.groq.com/openai/v1",
@@ -30,6 +32,11 @@ PROVIDERS = {
         "base_url": "https://api.deepseek.com",
         "env_key": "DEEPSEEK_API_KEY",
         "default_model": "deepseek-chat",
+    },
+    "ollama": {
+        "base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+        "env_key": "OLLAMA_API_KEY",
+        "default_model": os.getenv("LLM_MODEL", "llama3.1:8b"),
     },
 }
 
@@ -47,7 +54,7 @@ class BaseAgent(ABC):
     def __init__(
         self,
         registry: ToolRegistry,
-        provider: str = "groq",
+        provider: str = DEFAULT_PROVIDER,
         model: str | None = None,
     ):
         self.registry = registry
@@ -61,9 +68,9 @@ class BaseAgent(ABC):
     @property
     def client(self):
         if self._client is None:
-            api_key = os.getenv(self._provider_config["env_key"])
+            api_key = os.getenv(self._provider_config["env_key"]) or "ollama"
             base_url = self._provider_config["base_url"]
-            self._client = OpenAI(api_key=api_key, base_url=base_url)
+            self._client = OpenAI(api_key=api_key, base_url=base_url) if base_url else OpenAI(api_key=api_key)
         return self._client
 
     @client.setter
