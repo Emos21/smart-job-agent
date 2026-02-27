@@ -98,8 +98,66 @@ class AgentRouter:
                 )
         return self._client
 
+    # Keyword patterns for fast routing (no LLM call needed)
+    _FAST_PATTERNS = {
+        "job_search": [
+            "find me", "search for", "look for", "find jobs", "job search",
+            "jobs in", "openings", "vacancies", "hiring", "positions in",
+            "remote jobs", "looking for work", "job listings",
+        ],
+        "interview_prep": [
+            "interview prep", "interview questions", "mock interview",
+            "prepare for interview", "practice interview", "coaching",
+        ],
+        "write_materials": [
+            "cover letter", "rewrite my resume", "write a resume",
+            "application letter", "write my cv",
+        ],
+        "analyze_match": [
+            "ats score", "match my resume", "compare my resume",
+            "analyze this job", "fit for this role", "skills gap",
+        ],
+    }
+
+    def _try_fast_route(self, message: str) -> RoutingDecision | None:
+        """Attempt keyword-based routing without an LLM call.
+
+        Returns a RoutingDecision if a clear pattern matches, else None.
+        """
+        msg_lower = message.lower()
+
+        # General chat shortcuts (greetings, thanks, etc.)
+        greetings = ["hello", "hi ", "hey", "thanks", "thank you", "good morning",
+                      "good evening", "how are you", "what can you do", "help"]
+        if any(msg_lower.strip().startswith(g) for g in greetings):
+            return RoutingDecision(
+                intent="general_chat", agents=[], extracted_context={},
+                reasoning="Fast-routed: greeting or general query",
+            )
+
+        # Pattern-based routing
+        defaults = {
+            "job_search": ["scout"],
+            "analyze_match": ["match"],
+            "write_materials": ["match", "forge"],
+            "interview_prep": ["coach"],
+        }
+        for intent, patterns in self._FAST_PATTERNS.items():
+            if any(p in msg_lower for p in patterns):
+                return RoutingDecision(
+                    intent=intent, agents=defaults[intent], extracted_context={},
+                    reasoning=f"Fast-routed: keyword match for {intent}",
+                )
+
+        return None
+
     def route(self, message: str, has_resume: bool = False, has_profile: bool = False) -> RoutingDecision:
-        """Classify user intent with a cheap, focused LLM call."""
+        """Classify user intent, using fast keyword match when possible."""
+        # Try fast routing first (no LLM call)
+        fast = self._try_fast_route(message)
+        if fast is not None:
+            return fast
+
         context_hint = ""
         if has_resume:
             context_hint += " The user has a resume on file."
