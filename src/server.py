@@ -784,7 +784,7 @@ def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
 
     client = _get_llm_client()
     if not client:
-        response = "AI backend not configured. Please set GROQ_API_KEY in your .env file."
+        response = "AI backend not configured. Set LLM_PROVIDER=ollama for local inference or GROQ_API_KEY for cloud."
         db.save_chat_message("assistant", response, conversation_id)
         return {"response": response, "conversation_id": conversation_id}
 
@@ -1123,7 +1123,7 @@ def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
     def generate():
         nonlocal conversation_id
         if not client:
-            yield f"data: {json.dumps({'type': 'content', 'text': 'AI backend not configured. Please set GROQ_API_KEY.'})}\n\n"
+            yield f"data: {json.dumps({'type': 'content', 'text': 'AI backend not configured. Set LLM_PROVIDER=ollama for local inference or GROQ_API_KEY for cloud.'})}\n\n"
             yield f"data: {json.dumps({'type': 'done', 'conversation_id': conversation_id})}\n\n"
             return
 
