@@ -79,6 +79,19 @@ if os.path.exists(frontend_dist):
     app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist, "assets")), name="assets")
 
 
+@app.get("/api/health")
+def health_check():
+    """Health check endpoint for monitoring and load balancers."""
+    provider = os.getenv("LLM_PROVIDER", "groq")
+    client = _get_llm_client()
+    return {
+        "status": "healthy",
+        "llm_provider": provider,
+        "llm_model": os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
+        "llm_connected": client is not None,
+    }
+
+
 # --- Request/Response Models ---
 
 class RegisterRequest(BaseModel):
