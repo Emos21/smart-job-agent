@@ -88,14 +88,16 @@ class Orchestrator:
         ))
 
         # Import evaluator (Phase 2) and learner (Phase 5) if available
+        # Skip evaluator for general_chat — no pipeline to evaluate
         evaluator = None
         learner = None
         rl_trainer = None
-        try:
-            from .evaluator import PipelineEvaluator
-            evaluator = PipelineEvaluator()
-        except ImportError:
-            pass
+        if routing.intent != "general_chat":
+            try:
+                from .evaluator import PipelineEvaluator
+                evaluator = PipelineEvaluator()
+            except ImportError:
+                pass
         try:
             from .learner import AgentLearner
             learner = AgentLearner()
