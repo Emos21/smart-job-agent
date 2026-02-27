@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -40,6 +41,9 @@ class Orchestrator:
         "forge": create_forge_agent,
         "coach": create_coach_agent,
     }
+
+    # Max seconds for the entire pipeline (0 = no limit)
+    PIPELINE_TIMEOUT = int(os.getenv("PIPELINE_TIMEOUT", "0"))
 
     def __init__(self, provider: str = "groq", model: str | None = None):
         self.provider = provider
